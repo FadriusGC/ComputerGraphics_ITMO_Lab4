@@ -1,4 +1,4 @@
-﻿#include <DirectXMath.h>
+﻿#include <SimpleMath.h>
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
@@ -6,7 +6,9 @@
 #include <wrl.h>
 
 #include <cassert>
+#include <cmath>
 #include <stdexcept>
+#include <string>
 
 #include "d3dx12.h"
 
@@ -16,6 +18,7 @@
 #pragma comment(lib, "dxguid.lib")
 
 using Microsoft::WRL::ComPtr;
+using std::wstring;
 
 #define ThrowIfFailed(x)                                                     \
   {                                                                          \
@@ -33,6 +36,117 @@ const int SwapChainBufferCount = 2;
 const DXGI_FORMAT BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 const DXGI_FORMAT DepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 
+class GameTimer {
+ public:
+  GameTimer();
+
+  float TotalTime() const;  // в секундах
+  float DeltaTime() const;  // в секундах
+
+  void Reset();  // Вызывать перед циклом сообщений
+  void Start();  // Вызывать при возобновлении
+  void Stop();   // Вызывать при паузе
+  void Tick();   // Вызывать каждый кадр
+
+ private:
+  double mSecondsPerCount;
+  double mDeltaTime;
+
+  __int64 mBaseTime;
+  __int64 mPausedTime;
+  __int64 mStopTime;
+  __int64 mPrevTime;
+  __int64 mCurrTime;
+
+  bool mStopped;
+};
+// Класс таймера, со второй части лабы
+GameTimer::GameTimer()
+    : mSecondsPerCount(0.0),
+      mDeltaTime(-1.0),
+      mBaseTime(0),
+      mPausedTime(0),
+      mPrevTime(0),
+      mCurrTime(0),
+      mStopped(false) {
+  __int64 countsPerSec;
+  QueryPerformanceFrequency((LARGE_INTEGER*)&countsPerSec);
+  mSecondsPerCount = 1.0 / (double)countsPerSec;
+}
+
+void GameTimer::Reset() {
+  __int64 currTime;
+  QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+
+  mBaseTime = currTime;
+  mPrevTime = currTime;
+  mStopTime = 0;
+  mStopped = false;
+}
+
+void GameTimer::Start() {
+  __int64 startTime;
+  QueryPerformanceCounter((LARGE_INTEGER*)&startTime);
+
+  // Если возобновляем после паузы
+  if (mStopped) {
+    // Накопляем время паузы
+    mPausedTime += (startTime - mStopTime);
+
+    // Сбрасываем предыдущее время, так как оно было получено во время паузы
+    mPrevTime = startTime;
+
+    // Сбрасываем стоп-время и флаг
+    mStopTime = 0;
+    mStopped = false;
+  }
+}
+
+void GameTimer::Stop() {
+  if (!mStopped) {
+    __int64 currTime;
+    QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+
+    // Сохраняем время остановки
+    mStopTime = currTime;
+    mStopped = true;
+  }
+}
+
+void GameTimer::Tick() {
+  if (mStopped) {
+    mDeltaTime = 0.0;
+    return;
+  }
+
+  // Получаем текущее время
+  __int64 currTime;
+  QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+  mCurrTime = currTime;
+
+  // Вычисляем разницу с предыдущим кадром
+  mDeltaTime = (mCurrTime - mPrevTime) * mSecondsPerCount;
+
+  // Готовимся к следующему кадру
+  mPrevTime = mCurrTime;
+
+  // Гарантируем неотрицательность
+  if (mDeltaTime < 0.0) {
+    mDeltaTime = 0.0;
+  }
+}
+
+float GameTimer::TotalTime() const {
+  // Если таймер остановлен, не считаем время с момента остановки
+  if (mStopped) {
+    return (float)(((mStopTime - mPausedTime) - mBaseTime) * mSecondsPerCount);
+  } else {
+    return (float)(((mCurrTime - mPausedTime) - mBaseTime) * mSecondsPerCount);
+  }
+}
+
+float GameTimer::DeltaTime() const { return (float)mDeltaTime; }
+
 // Класс окна
 class D3DWindow {
  public:
@@ -44,9 +158,9 @@ class D3DWindow {
   HWND GetHWND() const { return m_hWnd; }
   int GetWidth() const { return m_width; }
   int GetHeight() const { return m_height; }
-
-  // Основной цикл обработки сообщений
-  int Run();
+  bool IsPaused() const { return m_appPaused || m_minimized || m_resizing; }
+  bool IsResizing() const { return m_resizing; }
+  void SetPaused(bool paused) { m_appPaused = paused; }
 
  private:
   static LRESULT CALLBACK StaticWindowProc(HWND hWnd, UINT msg, WPARAM wParam,
@@ -56,9 +170,12 @@ class D3DWindow {
   HWND m_hWnd;
   int m_width;
   int m_height;
-  bool m_isMinimized = false;
-  bool m_isMaximized = false;
-  bool m_isResizing = false;
+
+  // Флаги состояния (как в луне)
+  bool m_appPaused = false;  // Приложение на паузе
+  bool m_minimized = false;  // Окно свернуто
+  bool m_maximized = false;  // Окно развернуто
+  bool m_resizing = false;   // Изменение размера
 };
 
 bool D3DWindow::Initialize(HINSTANCE hInstance, int width, int height,
@@ -66,7 +183,7 @@ bool D3DWindow::Initialize(HINSTANCE hInstance, int width, int height,
   m_width = width;
   m_height = height;
 
-  // Инициализируем класс кона
+  // Инициализируем класс окна
   WNDCLASS wc = {};
   wc.style = CS_HREDRAW | CS_VREDRAW;
   wc.lpfnWndProc = StaticWindowProc;
@@ -91,8 +208,7 @@ bool D3DWindow::Initialize(HINSTANCE hInstance, int width, int height,
   m_hWnd = CreateWindow(L"D3D12WindowClass", title, WS_OVERLAPPEDWINDOW,
                         CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left,
                         rect.bottom - rect.top, nullptr, nullptr, hInstance,
-                        this  // Передаём указатель на класс
-  );
+                        this);  // Передаём указатель на класс
 
   if (!m_hWnd) {
     MessageBox(nullptr, L"Failed to create window", L"Error",
@@ -133,39 +249,65 @@ LRESULT CALLBACK D3DWindow::StaticWindowProc(HWND hWnd, UINT msg, WPARAM wParam,
 
 LRESULT D3DWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
-    case WM_DESTROY:
-      PostQuitMessage(0);
+      // Сообщение активации окна (как в луне)
+    case WM_ACTIVATE:
+      if (LOWORD(wParam) == WA_INACTIVE) {
+        m_appPaused = true;
+      } else {
+        m_appPaused = false;
+      }
       return 0;
 
+      // Изменение размера окна
     case WM_SIZE:
       m_width = LOWORD(lParam);
       m_height = HIWORD(lParam);
 
       if (wParam == SIZE_MINIMIZED) {
-        m_isMinimized = true;
-        m_isMaximized = false;
+        m_minimized = true;
+        m_maximized = false;
+        m_appPaused = true;
       } else if (wParam == SIZE_MAXIMIZED) {
-        m_isMinimized = false;
-        m_isMaximized = true;
+        m_minimized = false;
+        m_maximized = true;
+        m_appPaused = false;
       } else if (wParam == SIZE_RESTORED) {
-        if (m_isMinimized) {
-          m_isMinimized = false;
-        } else if (m_isMaximized) {
-          m_isMaximized = false;
+        // Восстановление из свернутого/развернутого состояния
+        if (m_minimized) {
+          m_minimized = false;
+          m_appPaused = false;
+        } else if (m_maximized) {
+          m_maximized = false;
+          m_appPaused = false;
         }
       }
       return 0;
 
+      // Начало изменения размера
     case WM_ENTERSIZEMOVE:
-      m_isResizing = true;
+      m_resizing = true;
+      m_appPaused = true;
       return 0;
 
+      // Конец изменения размера
     case WM_EXITSIZEMOVE:
-      m_isResizing = false;
+      m_resizing = false;
+      m_appPaused = false;
       return 0;
 
+      // Закрытие окна
+    case WM_DESTROY:
+      PostQuitMessage(0);
+      return 0;
+
+      // Предотвращение слишком маленького окна
+    case WM_GETMINMAXINFO:
+      ((MINMAXINFO*)lParam)->ptMinTrackSize.x = 200;
+      ((MINMAXINFO*)lParam)->ptMinTrackSize.y = 200;
+      return 0;
+
+      // Обработка перерисовки
     case WM_PAINT:
-      // Обработка перерисовки окна
       PAINTSTRUCT ps;
       BeginPaint(m_hWnd, &ps);
       EndPaint(m_hWnd, &ps);
@@ -175,31 +317,20 @@ LRESULT D3DWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
   return DefWindowProc(m_hWnd, msg, wParam, lParam);
 }
 
-int D3DWindow::Run() {
-  MSG msg = {};
-
-  while (msg.message != WM_QUIT) {
-    if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
-    } else {
-      // Здесь будет основной цикл анимации и чего там хз крч когда таймеры
-      // будут, пока тупо слип
-      Sleep(10);
-    }
-  }
-
-  return static_cast<int>(msg.wParam);
-}
-
+// Класс приложения
 class D3DApp {
  public:
   D3DApp() = default;
   ~D3DApp() { Cleanup(); }
 
-  bool Initialize(D3DWindow* window);
-  void Render();
+  bool Initialize(HINSTANCE hInstance);
+  int Run();  // Главный цикл приложения
+
+  virtual void Update(const GameTimer& gt);
+  virtual void Draw(const GameTimer& gt);
+
   void Cleanup();
+  HWND GetMainWnd() const { return m_window.GetHWND(); }
 
  private:
   void CreateDevice();
@@ -209,11 +340,19 @@ class D3DApp {
   void CreateRTVs();
   void CreateDepthStencil();
   void FlushCommandQueue();
+  void CalculateFrameStats();  // Статистика кадров
 
   D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
   D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
 
-  D3DWindow* m_window = nullptr;
+  // Окно приложения
+  D3DWindow m_window;
+  GameTimer m_timer;
+
+  // Статистика кадров
+  int m_frameCnt = 0;
+  float m_timeElapsed = 0.0f;
+  wstring m_mainWndCaption = L"Direct3D 12 App";
 
   // D3D12 объекты
   ComPtr<IDXGIFactory4> m_factory;
@@ -236,8 +375,12 @@ class D3DApp {
   int m_currBackBuffer = 0;
 };
 
-bool D3DApp::Initialize(D3DWindow* window) {
-  m_window = window;
+bool D3DApp::Initialize(HINSTANCE hInstance) {
+  // Инициализируем окно
+  if (!m_window.Initialize(hInstance, WIDTH, HEIGHT,
+                           L"Direct3D 12 Initialization")) {
+    return false;
+  }
 
   try {
     CreateDevice();
@@ -253,9 +396,61 @@ bool D3DApp::Initialize(D3DWindow* window) {
   }
 }
 
+int D3DApp::Run() {
+  MSG msg = {0};
+  m_timer.Reset();
+
+  while (msg.message != WM_QUIT) {
+    // Если есть сообщения окна, обрабатываем их
+    if (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessage(&msg);
+    }
+    // В противном случае, выполняем игровые операции
+    else {
+      m_timer.Tick();
+
+      if (!m_window.IsPaused()) {
+        CalculateFrameStats();  // Вычисляем статистику
+        Update(m_timer);        // Обновляем логику
+        Draw(m_timer);          // Рендерим кадр
+      } else {
+        // Если приложение на паузе, слипаем систему
+        Sleep(100);
+      }
+    }
+  }
+
+  return (int)msg.wParam;
+}
+
+void D3DApp::CalculateFrameStats() {
+  // Вычисляем FPS (по примеру из Луны)
+  m_frameCnt++;
+
+  // Вычисляем среднее за 1 секунду
+  if ((m_timer.TotalTime() - m_timeElapsed) >= 1.0f) {
+    float fps = (float)m_frameCnt;  // fps = frameCnt / 1 секунда
+    float mspf = 1000.0f / fps;     // миллисекунд на кадр
+
+    wstring fpsStr = std::to_wstring(fps);
+    wstring mspfStr = std::to_wstring(mspf);
+
+    wstring windowText =
+        m_mainWndCaption + L"    fps: " + fpsStr + L"   mspf: " + mspfStr;
+
+    SetWindowText(m_window.GetHWND(), windowText.c_str());
+
+    // Сбрасываем для следующего усреднения
+    m_frameCnt = 0;
+    m_timeElapsed += 1.0f;
+  }
+}
+
 void D3DApp::CreateDevice() {
   ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&m_factory)));
-  // отладочный слой в дебаг режиме
+
+  // Включаем отладочный слой в режиме Debug
 #if defined(DEBUG) || defined(_DEBUG)
   ComPtr<ID3D12Debug> debugController;
   if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
@@ -263,11 +458,11 @@ void D3DApp::CreateDevice() {
   }
 #endif
 
-  // делаем двейс
+  // Пытаемся создать устройство
   HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0,
                                  IID_PPV_ARGS(&m_device));
 
-  // если не получилось, используем WARP
+  // Если не получилось, используем WARP адаптер
   if (FAILED(hr)) {
     ComPtr<IDXGIAdapter> warpAdapter;
     ThrowIfFailed(m_factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter)));
@@ -275,11 +470,11 @@ void D3DApp::CreateDevice() {
                                     IID_PPV_ARGS(&m_device)));
   }
 
-  // Создание ограждения
+  // Создаем ограждение
   ThrowIfFailed(
       m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
 
-  // Получение размеров дескрипторов
+  // Получаем размеры дескрипторов
   m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
   m_dsvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(
@@ -287,7 +482,7 @@ void D3DApp::CreateDevice() {
   m_cbvSrvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-  // Проверка поддержки MSAA
+  // Проверяем поддержку MSAA
   D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels;
   msQualityLevels.Format = BackBufferFormat;
   msQualityLevels.SampleCount = 4;
@@ -327,8 +522,8 @@ void D3DApp::CreateSwapChain() {
   m_swapChain.Reset();
 
   DXGI_SWAP_CHAIN_DESC sd = {};
-  sd.BufferDesc.Width = m_window->GetWidth();
-  sd.BufferDesc.Height = m_window->GetHeight();
+  sd.BufferDesc.Width = m_window.GetWidth();
+  sd.BufferDesc.Height = m_window.GetHeight();
   sd.BufferDesc.RefreshRate.Numerator = 60;
   sd.BufferDesc.RefreshRate.Denominator = 1;
   sd.BufferDesc.Format = BackBufferFormat;
@@ -338,7 +533,7 @@ void D3DApp::CreateSwapChain() {
   sd.SampleDesc.Quality = 0;
   sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   sd.BufferCount = SwapChainBufferCount;
-  sd.OutputWindow = m_window->GetHWND();
+  sd.OutputWindow = m_window.GetHWND();
   sd.Windowed = TRUE;
   sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
   sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
@@ -381,8 +576,8 @@ void D3DApp::CreateRTVs() {
 void D3DApp::CreateDepthStencil() {
   D3D12_RESOURCE_DESC depthStencilDesc = {};
   depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-  depthStencilDesc.Width = m_window->GetWidth();
-  depthStencilDesc.Height = m_window->GetHeight();
+  depthStencilDesc.Width = m_window.GetWidth();
+  depthStencilDesc.Height = m_window.GetHeight();
   depthStencilDesc.DepthOrArraySize = 1;
   depthStencilDesc.MipLevels = 1;
   depthStencilDesc.Format = DepthStencilFormat;
@@ -436,7 +631,20 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::DepthStencilView() const {
   return m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 }
 
-void D3DApp::Render() {
+void D3DApp::Update(const GameTimer& gt) {
+  // Базовая реализация пуста
+  // В производных классах можно переопределить для анимации
+}
+
+void D3DApp::Draw(const GameTimer& gt) {
+  // Используем время для анимации цвета
+  float time = gt.TotalTime();
+  float r = (sinf(time) + 1.0f) * 0.5f;  // От 0 до 1
+  float g = (cosf(time * 0.7f) + 1.0f) * 0.5f;
+  float b = (sinf(time * 1.3f) + 1.0f) * 0.5f;
+
+  float clearColor[] = {r, g, b, 1.0f};
+
   // Сброс команд
   ThrowIfFailed(m_commandAllocator->Reset());
   ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
@@ -448,16 +656,12 @@ void D3DApp::Render() {
 
   m_commandList->ResourceBarrier(1, &barrier1);
 
-  // Очистка заднего буфера
-  float clearColor[] = {0.0f, 0.2f, 0.4f, 1.0f};
-
-  // Используем функцию CurrentBackBufferView
+  // Очистка заднего буфера (цвет меняется со временем)
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = CurrentBackBufferView();
-
   m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
+  // Очистка буфера глубины/трафарета
   D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = DepthStencilView();
-
   m_commandList->ClearDepthStencilView(
       dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0,
       nullptr);
@@ -523,38 +727,33 @@ void D3DApp::Cleanup() {
   m_fence.Reset();
 }
 
+// Запуск
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, PSTR cmdLine,
                    int showCmd) {
   (void)prevInstance;
   (void)cmdLine;
 
-  // Создаём окно
-  D3DWindow window;
-  if (!window.Initialize(hInstance, WIDTH, HEIGHT,
-                         L"Direct3D 12 Initialization")) {
-    return 1;
-  }
+  // Включаем проверку утечек памяти в Debug
+#if defined(DEBUG) || defined(_DEBUG)
+  _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+#endif
 
-  // Инициализируем Direct3D
-  D3DApp app;
-  if (!app.Initialize(&window)) {
-    return 1;
-  }
-
-  // Показываем окно
-  ShowWindow(window.GetHWND(), showCmd);
-  UpdateWindow(window.GetHWND());
-
-  // Основной цикл
-  MSG msg = {};
-  while (msg.message != WM_QUIT) {
-    if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
-    } else {
-      app.Render();
+  try {
+    // Создаем приложение
+    D3DApp app;
+    if (!app.Initialize(hInstance)) {
+      return 1;
     }
-  }
 
-  return 0;
+    // Показываем окно
+    ShowWindow(app.GetMainWnd(), showCmd);
+    UpdateWindow(app.GetMainWnd());
+
+    // Запускаем главный цикл
+    return app.Run();
+
+  } catch (const std::exception& e) {
+    MessageBoxA(nullptr, e.what(), "Error", MB_OK | MB_ICONERROR);
+    return 1;
+  }
 }
