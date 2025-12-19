@@ -53,11 +53,22 @@ const T& clamp_val(const T& value, const T& min, const T& max) {
 // Структуры вершин и констант
 struct Vertex {
   DirectX::SimpleMath::Vector3 Pos;
+  DirectX::SimpleMath::Vector3 Normal;  // Нормали для корректного освещения
   DirectX::SimpleMath::Vector4 Color;
 };
 
 struct ObjectConstants {
-  DirectX::SimpleMath::Matrix WorldViewProj;
+  DirectX::SimpleMath::Matrix World;          // Матрица мира для трансформации
+  DirectX::SimpleMath::Matrix WorldViewProj;  // Матрица проекции
+};
+
+// Структура для параметров света
+struct LightConstants {
+  DirectX::SimpleMath::Vector4
+      LightPosition;                        // Позиция света (x, y, z, w=1.0f)
+  DirectX::SimpleMath::Vector4 LightColor;  // Цвет света (r, g, b, a)
+  DirectX::SimpleMath::Vector4
+      CameraPosition;  // Позиция камеры для вычисления viewDir
 };
 
 // Класс для загрузки ресурсов GPU (шаблонный)
@@ -415,8 +426,11 @@ class BoxApp {
   ComPtr<ID3DBlob> mVSByteCode;
   ComPtr<ID3DBlob> mPSByteCode;
 
-  // Константный буфер
-  std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
+  // Константные буферы
+  std::unique_ptr<UploadBuffer<ObjectConstants>>
+      mObjectCB;  // Для объекта (World, WorldViewProj)
+  std::unique_ptr<UploadBuffer<LightConstants>>
+      mLightCB;  // Для параметров света
 
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
@@ -474,7 +488,7 @@ BoxApp::~BoxApp() { FlushCommandQueue(); }
 
 bool BoxApp::Initialize() {
   if (!m_window.Initialize(GetModuleHandle(nullptr), WIDTH, HEIGHT,
-                           L"Direct3D 12 Box")) {
+                           L"Direct3D 12 Box with Phong Lighting")) {
     return false;
   }
 
@@ -544,9 +558,9 @@ void BoxApp::BuildDescriptorHeaps() {
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mDsvHeap)));
 
-  // Куча CBV
+  // Куча CBV (для константных буферов)
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
-  cbvHeapDesc.NumDescriptors = 1;
+  cbvHeapDesc.NumDescriptors = 2;  // Два буфера: Object и Light
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -554,30 +568,54 @@ void BoxApp::BuildDescriptorHeaps() {
 }
 
 void BoxApp::BuildConstantBuffers() {
+  // Константный буфер для объекта (World и WorldViewProj)
   mObjectCB = std::unique_ptr<UploadBuffer<ObjectConstants>>(
       new UploadBuffer<ObjectConstants>(mDevice.Get(), 1, true));
 
-  // Описание CBV
-  D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-  cbvDesc.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
-  cbvDesc.SizeInBytes =
+  // Константный буфер для параметров света
+  mLightCB = std::unique_ptr<UploadBuffer<LightConstants>>(
+      new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
+
+  // Описание CBV для ObjectConstants (register(b0))
+  D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
+  cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
+  cbvDescObject.SizeInBytes =
       (sizeof(ObjectConstants) + 255) & ~255;  // Выравнивание до 256 байт
 
+  // Описание CBV для LightConstants (register(b1))
+  D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescLight = {};
+  cbvDescLight.BufferLocation = mLightCB->Resource()->GetGPUVirtualAddress();
+  cbvDescLight.SizeInBytes =
+      (sizeof(LightConstants) + 255) & ~255;  // Выравнивание до 256 байт
+
+  // Создаем CBV для ObjectConstants в начале кучи
   mDevice->CreateConstantBufferView(
-      &cbvDesc, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
+      &cbvDescObject, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
+
+  // Создаем CBV для LightConstants со смещением
+  CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
+  mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
 }
 
 void BoxApp::BuildRootSignature() {
-  CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+  // Создаем два слота: один для ObjectConstants (b0), другой для LightConstants
+  // (b1)
+  CD3DX12_ROOT_PARAMETER slotRootParameter[2];
 
-  // Создаем таблицу дескрипторов с одним CBV
-  CD3DX12_DESCRIPTOR_RANGE cbvTable;
-  cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
-  slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable);
+  // Слот 0: ObjectConstants (b0)
+  CD3DX12_DESCRIPTOR_RANGE cbvTable0;
+  cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+  slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable0);
+
+  // Слот 1: LightConstants (b1)
+  CD3DX12_DESCRIPTOR_RANGE cbvTable1;
+  cbvTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1);
+  slotRootParameter[1].InitAsDescriptorTable(1, &cbvTable1);
 
   // Описание корневой сигнатуры
   CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(
-      1, slotRootParameter, 0, nullptr,
+      2, slotRootParameter, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serializedRootSig = nullptr;
@@ -601,18 +639,31 @@ void BoxApp::BuildShadersAndInputLayout() {
   const char* vsCode =
       "struct VS_INPUT {\n"
       "    float3 Pos : POSITION;\n"
+      "    float3 Normal : NORMAL;\n"
       "    float4 Color : COLOR;\n"
       "};\n"
       "struct VS_OUTPUT {\n"
       "    float4 Pos : SV_POSITION;\n"
+      "    float3 WorldPos : WORLDPOS;\n"  // Позиция в мировом пространстве
+      "    float3 Normal : NORMAL;\n"      // Нормаль в мировом пространстве
       "    float4 Color : COLOR;\n"
       "};\n"
       "cbuffer cbPerObject : register(b0) {\n"
-      "    float4x4 gWorldViewProj;\n"
+      "    float4x4 gWorld;\n"          // Матрица мира
+      "    float4x4 gWorldViewProj;\n"  // Матрица проекции
+      "};\n"
+      "cbuffer cbLight : register(b1) {\n"
+      "    float4 gLightPosition;\n"
+      "    float4 gLightColor;\n"
+      "    float4 gCameraPosition;\n"
       "};\n"
       "VS_OUTPUT VS(VS_INPUT input) {\n"
       "    VS_OUTPUT output;\n"
       "    output.Pos = mul(float4(input.Pos, 1.0f), gWorldViewProj);\n"
+      "    output.WorldPos = mul(float4(input.Pos, 1.0f), gWorld).xyz;\n"
+      "    // Трансформируем нормаль: используем матрицу мира (без "
+      "транспонирования, так как нет масштабирования)\n"
+      "    output.Normal = mul(float4(input.Normal, 0.0f), gWorld).xyz;\n"
       "    output.Color = input.Color;\n"
       "    return output;\n"
       "}";
@@ -621,10 +672,37 @@ void BoxApp::BuildShadersAndInputLayout() {
   const char* psCode =
       "struct PS_INPUT {\n"
       "    float4 Pos : SV_POSITION;\n"
+      "    float3 WorldPos : WORLDPOS;\n"
+      "    float3 Normal : NORMAL;\n"
       "    float4 Color : COLOR;\n"
       "};\n"
+      "cbuffer cbLight : register(b1) {\n"
+      "    float4 gLightPosition;\n"
+      "    float4 gLightColor;\n"
+      "    float4 gCameraPosition;\n"
+      "};\n"
       "float4 PS(PS_INPUT input) : SV_Target {\n"
-      "    return input.Color;\n"
+      "    // Нормализуем нормаль\n"
+      "    float3 normal = normalize(input.Normal);\n"
+      "    \n"
+      "    // Направление света\n"
+      "    float3 lightDir = normalize(gLightPosition.xyz - input.WorldPos);\n"
+      "    \n"
+      "    // Диффузное освещение\n"
+      "    float diffuse = max(dot(normal, lightDir), 0.0f);\n"
+      "    float3 diffuseColor = diffuse * gLightColor.rgb * input.Color.rgb;\n"
+      "    \n"
+      "    // Амбиентное освещение\n"
+      "    float3 ambient = 0.1f * gLightColor.rgb * input.Color.rgb;\n"
+      "    \n"
+      "    // Специфическое освещение\n"
+      "    float3 viewDir = normalize(gCameraPosition.xyz - input.WorldPos);\n"
+      "    float3 reflectDir = reflect(-lightDir, normal);\n"
+      "    float specular = pow(max(dot(reflectDir, viewDir), 0.0f), 32.0f);\n"
+      "    float3 specularColor = specular * gLightColor.rgb * 0.5f;\n"
+      "    \n"
+      "    float3 finalColor = ambient + diffuseColor + specularColor;\n"
+      "    return float4(finalColor, 1.0f);\n"
       "}";
 
   ComPtr<ID3DBlob> errorBlob;
@@ -653,54 +731,115 @@ void BoxApp::BuildShadersAndInputLayout() {
   // Входной лейаут
   mInputLayout = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
+                  {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,
+                   12,  // Смещение после Pos (12 байт)
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0,
+                   24,  // Смещение после Normal (12 байт)
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::array<Vertex, 8> vertices = {
-      // Передняя грань (Z = -1)
-      Vertex(
-          {DirectX::SimpleMath::Vector3(-1.0f, -1.0f, -1.0f),
-           DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f)}),  // 0: белый
-      Vertex(
-          {DirectX::SimpleMath::Vector3(-1.0f, 1.0f, -1.0f),
-           DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 1.0f)}),  // 1: черный
-      Vertex({DirectX::SimpleMath::Vector3(1.0f, 1.0f, -1.0f),
-              DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f,
-                                           1.0f)}),  // 2: красный
-      Vertex({DirectX::SimpleMath::Vector3(1.0f, -1.0f, -1.0f),
-              DirectX::SimpleMath::Vector4(0.0f, 1.0f, 0.0f,
-                                           1.0f)}),  // 3: зеленый
+  // Создаем 24 вершины (по 4 на грань) для корректных нормалей
+  std::array<Vertex, 24> vertices = {
+      // Front (z = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 0: белый
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 1: черный
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 2: красный
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 3: зеленый
 
-      // Задняя грань (Z = 1)
-      Vertex(
-          {DirectX::SimpleMath::Vector3(-1.0f, -1.0f, 1.0f),
-           DirectX::SimpleMath::Vector4(0.0f, 0.0f, 1.0f, 1.0f)}),  // 4: синий
-      Vertex(
-          {DirectX::SimpleMath::Vector3(-1.0f, 1.0f, 1.0f),
-           DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.0f, 1.0f)}),  // 5: желтый
-      Vertex({DirectX::SimpleMath::Vector3(1.0f, 1.0f, 1.0f),
-              DirectX::SimpleMath::Vector4(0.0f, 1.0f, 1.0f,
-                                           1.0f)}),  // 6: голубой
-      Vertex({DirectX::SimpleMath::Vector3(1.0f, -1.0f, 1.0f),
-              DirectX::SimpleMath::Vector4(1.0f, 0.0f, 1.0f,
-                                           1.0f)})  // 7: пурпурный
+      // Back (z = 1)
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 4: синий
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 5: желтый
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 6: голубой
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 7: пурпурный
+
+      // Left (x = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 8
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 9
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 10
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 11
+
+      // Right (x = 1)
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 12
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 13
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 14
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 15
+
+      // Top (y = 1)
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 16
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 17
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 18
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 19
+
+      // Bottom (y = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 20
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 21
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 22
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 23
   };
 
-  // Индексы
-  std::array<uint16_t, 36> indices = {// front face
+  // Индексы: по 6 индексов на грань (36 индексов всего)
+  std::array<uint16_t, 36> indices = {// Front face
                                       0, 1, 2, 0, 2, 3,
-                                      // back face
-                                      4, 6, 5, 4, 7, 6,
-                                      // left face
-                                      4, 5, 1, 4, 1, 0,
-                                      // right face
-                                      3, 2, 6, 3, 6, 7,
-                                      // top face
-                                      1, 5, 6, 1, 6, 2,
-                                      // bottom face
-                                      4, 0, 3, 4, 3, 7};
+                                      // Back face
+                                      4, 5, 6, 4, 6, 7,
+                                      // Left face
+                                      8, 9, 10, 8, 10, 11,
+                                      // Right face
+                                      12, 13, 14, 12, 14, 15,
+                                      // Top face
+                                      16, 17, 18, 16, 18, 19,
+                                      // Bottom face
+                                      20, 21, 22, 20, 22, 23};
 
   mVertexBufferByteSize = (UINT)(vertices.size() * sizeof(Vertex));
   mIndexBufferByteSize = (UINT)(indices.size() * sizeof(uint16_t));
@@ -956,10 +1095,23 @@ void BoxApp::Update(const GameTimer& gt) {
   // Комбинируем матрицы
   DirectX::SimpleMath::Matrix worldViewProj = mWorld * mView * mProj;
 
-  // Обновляем константный буфер
+  // Обновляем константный буфер объекта
   ObjectConstants objConstants;
+  objConstants.World = mWorld;
   objConstants.WorldViewProj = worldViewProj.Transpose();
   mObjectCB->CopyData(0, objConstants);
+
+  // Обновляем константный буфер света
+  LightConstants lightConstants;
+  // Позиция света (вверху справа)
+  lightConstants.LightPosition =
+      DirectX::SimpleMath::Vector4(3.0f, 3.0f, 3.0f, 1.0f);
+  // Белый свет
+  lightConstants.LightColor =
+      DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+  // Позиция камеры для вычисления viewDir
+  lightConstants.CameraPosition = DirectX::SimpleMath::Vector4(x, y, z, 1.0f);
+  mLightCB->CopyData(0, lightConstants);
 }
 
 void BoxApp::Draw(const GameTimer& gt) {
@@ -995,9 +1147,14 @@ void BoxApp::Draw(const GameTimer& gt) {
   // Устанавливаем корневую сигнатуру
   mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
-  // Привязываем константный буфер
+  // Привязываем константные буферы: Object (b0) и Light (b1)
   mCommandList->SetGraphicsRootDescriptorTable(
-      0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
+      0,
+      mCbvHeap->GetGPUDescriptorHandleForHeapStart());  // b0: ObjectConstants
+  mCommandList->SetGraphicsRootDescriptorTable(
+      1, CD3DX12_GPU_DESCRIPTOR_HANDLE(
+             mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1,
+             mCbvSrvDescriptorSize));  // b1: LightConstants
 
   // Устанавливаем вершинный и индексный буферы
   mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
@@ -1149,8 +1306,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE BoxApp::DepthStencilView() const {
   return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
 }
 
-// Запуск с аннотациями SAL - сделано нейронкой, честно не до конца разобрался
-// что за добро этот ваш SAL
+// Запуск с аннотациями SAL
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE prevInstance,
                    _In_ LPSTR cmdLine, _In_ int showCmd) {
   (void)prevInstance;
