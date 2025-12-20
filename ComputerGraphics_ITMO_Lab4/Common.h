@@ -11,7 +11,9 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>

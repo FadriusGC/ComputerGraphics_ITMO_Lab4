@@ -156,97 +156,23 @@ void BoxApp::BuildRootSignature() {
 }
 
 void BoxApp::BuildShadersAndInputLayout() {
-  // Вершинный шейдер
-  const char* vsCode =
-      "struct VS_INPUT {\n"
-      "    float3 Pos : POSITION;\n"
-      "    float3 Normal : NORMAL;\n"
-      "    float4 Color : COLOR;\n"
-      "};\n"
-      "struct VS_OUTPUT {\n"
-      "    float4 Pos : SV_POSITION;\n"
-      "    float3 WorldPos : WORLDPOS;\n"  // Позиция в мировом пространстве
-      "    float3 Normal : NORMAL;\n"      // Нормаль в мировом пространстве
-      "    float4 Color : COLOR;\n"
-      "};\n"
-      "cbuffer cbPerObject : register(b0) {\n"
-      "    float4x4 gWorld;\n"          // Матрица мира
-      "    float4x4 gWorldViewProj;\n"  // Матрица проекции
-      "};\n"
-      "cbuffer cbLight : register(b1) {\n"
-      "    float4 gLightPosition;\n"
-      "    float4 gLightColor;\n"
-      "    float4 gCameraPosition;\n"
-      "};\n"
-      "VS_OUTPUT VS(VS_INPUT input) {\n"
-      "    VS_OUTPUT output;\n"
-      "    output.Pos = mul(float4(input.Pos, 1.0f), gWorldViewProj);\n"
-      "    output.WorldPos = mul(float4(input.Pos, 1.0f), gWorld).xyz;\n"
-      "    // Трансформируем нормаль: используем матрицу мира (без "
-      "транспонирования, так как нет масштабирования)\n"
-      "    output.Normal = mul(float4(input.Normal, 0.0f), gWorld).xyz;\n"
-      "    output.Color = input.Color;\n"
-      "    return output;\n"
-      "}";
+  // Загружаем шейдеры из файлов
+  try {
+    // читаем с файла
+    mVSByteCode =
+        ShaderHelper::CompileShader(L"BoxVertexShader.hlsl", "VS", "vs_5_0");
+    mPSByteCode =
+        ShaderHelper::CompileShader(L"BoxPixelShader.hlsl", "PS", "ps_5_0");
 
-  // Пиксельный шейдер
-  const char* psCode =
-      "struct PS_INPUT {\n"
-      "    float4 Pos : SV_POSITION;\n"
-      "    float3 WorldPos : WORLDPOS;\n"
-      "    float3 Normal : NORMAL;\n"
-      "    float4 Color : COLOR;\n"
-      "};\n"
-      "cbuffer cbLight : register(b1) {\n"
-      "    float4 gLightPosition;\n"
-      "    float4 gLightColor;\n"
-      "    float4 gCameraPosition;\n"
-      "};\n"
-      "float4 PS(PS_INPUT input) : SV_Target {\n"
-      "    // Нормализуем нормаль\n"
-      "    float3 normal = normalize(input.Normal);\n"
-      "    \n"
-      "    // Направление света\n"
-      "    float3 lightDir = normalize(gLightPosition.xyz - input.WorldPos);\n"
-      "    \n"
-      "    // Диффузное освещение\n"
-      "    float diffuse = max(dot(normal, lightDir), 0.0f);\n"
-      "    float3 diffuseColor = diffuse * gLightColor.rgb * input.Color.rgb;\n"
-      "    \n"
-      "    // Амбиентное освещение\n"
-      "    float3 ambient = 0.1f * gLightColor.rgb * input.Color.rgb;\n"
-      "    \n"
-      "    // Специфическое освещение\n"
-      "    float3 viewDir = normalize(gCameraPosition.xyz - input.WorldPos);\n"
-      "    float3 reflectDir = reflect(-lightDir, normal);\n"
-      "    float specular = pow(max(dot(reflectDir, viewDir), 0.0f), 32.0f);\n"
-      "    float3 specularColor = specular * gLightColor.rgb * 0.5f;\n"
-      "    \n"
-      "    float3 finalColor = ambient + diffuseColor + specularColor;\n"
-      "    return float4(finalColor, 1.0f);\n"
-      "}";
-
-  ComPtr<ID3DBlob> errorBlob;
-
-  // Компилируем шейдеры
-  HRESULT hr = D3DCompile(vsCode, strlen(vsCode), nullptr, nullptr, nullptr,
-                          "VS", "vs_5_0", 0, 0, &mVSByteCode, &errorBlob);
-
-  if (FAILED(hr)) {
-    if (errorBlob != nullptr) {
-      OutputDebugStringA((char*)errorBlob->GetBufferPointer());
-    }
-    ThrowIfFailed(hr);
-  }
-
-  hr = D3DCompile(psCode, strlen(psCode), nullptr, nullptr, nullptr, "PS",
-                  "ps_5_0", 0, 0, &mPSByteCode, &errorBlob);
-
-  if (FAILED(hr)) {
-    if (errorBlob != nullptr) {
-      OutputDebugStringA((char*)errorBlob->GetBufferPointer());
-    }
-    ThrowIfFailed(hr);
+    // на всякий случай
+    // mVSByteCode =
+    // ShaderHelper::CompileShaderFromSource(L"BoxVertexShader.hlsl", "VS",
+    // "vs_5_0"); mPSByteCode =
+    // ShaderHelper::CompileShaderFromSource(L"BoxPixelShader.hlsl", "PS",
+    // "ps_5_0");
+  } catch (const std::exception& e) {
+    MessageBoxA(nullptr, e.what(), "Shader Error", MB_OK | MB_ICONERROR);
+    throw;
   }
 
   // Входной лейаут
@@ -611,6 +537,13 @@ void BoxApp::Update(const GameTimer& gt) {
 
   mView = DirectX::SimpleMath::Matrix::CreateLookAt(pos, target, up);
 
+  // Матрица мира
+  float time = static_cast<float>(gt.TotalTime());
+  float scaleFactor = 1.0f + 0.3f * sinf(time * 2.0f);
+  DirectX::SimpleMath::Matrix scaleMatrix =
+      DirectX::SimpleMath::Matrix::CreateScale(scaleFactor);
+  mWorld = scaleMatrix;
+
   // Комбинируем матрицы
   DirectX::SimpleMath::Matrix worldViewProj = mWorld * mView * mProj;
 
@@ -618,17 +551,16 @@ void BoxApp::Update(const GameTimer& gt) {
   ObjectConstants objConstants;
   objConstants.World = mWorld;
   objConstants.WorldViewProj = worldViewProj.Transpose();
+  objConstants.Time = time;
+  objConstants.ScaleFactor = scaleFactor;
   mObjectCB->CopyData(0, objConstants);
 
   // Обновляем константный буфер света
   LightConstants lightConstants;
-  // Позиция света (вверху справа)
   lightConstants.LightPosition =
       DirectX::SimpleMath::Vector4(3.0f, 3.0f, 3.0f, 1.0f);
-  // Белый свет
   lightConstants.LightColor =
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
-  // Позиция камеры для вычисления viewDir
   lightConstants.CameraPosition = DirectX::SimpleMath::Vector4(x, y, z, 1.0f);
   mLightCB->CopyData(0, lightConstants);
 }

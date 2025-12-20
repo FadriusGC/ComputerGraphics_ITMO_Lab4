@@ -1,5 +1,4 @@
 #pragma once
-#pragma once
 
 #include <SimpleMath.h>
 #include <d3d12.h>
@@ -20,6 +19,7 @@
 #include "Common.h"
 #include "D3DWindow.h"
 #include "GameTimer.h"
+#include "ShaderHelper.h"  // Добавляем заголовок для шейдеров
 #include "Structures.h"
 #include "UploadBuffer.h"
 #include "d3dx12.h"
@@ -86,7 +86,7 @@ class BoxApp {
 
   // Константные буферы
   std::unique_ptr<UploadBuffer<ObjectConstants>>
-      mObjectCB;  // Для объекта (World, WorldViewProj)
+      mObjectCB;  // Для объекта (World, WorldViewProj, Time, ScaleFactor)
   std::unique_ptr<UploadBuffer<LightConstants>>
       mLightCB;  // Для параметров света
 
