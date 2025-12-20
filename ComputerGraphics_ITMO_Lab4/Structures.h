@@ -12,6 +12,9 @@ struct Vertex {
 struct ObjectConstants {
   DirectX::SimpleMath::Matrix World;          // Матрица мира для трансформации
   DirectX::SimpleMath::Matrix WorldViewProj;  // Матрица проекции
+  float Time;                                 // Время для анимации
+  float ScaleFactor;                          // Коэффициент масштабирования
+  DirectX::SimpleMath::Vector2 Padding;       // Выравнивание
 };
 
 // Структура для параметров света
