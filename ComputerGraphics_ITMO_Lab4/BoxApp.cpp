@@ -539,7 +539,7 @@ void BoxApp::Update(const GameTimer& gt) {
 
   // Матрица мира
   float time = static_cast<float>(gt.TotalTime());
-  float scaleFactor = 1.0f + 0.3f * sinf(time * 2.0f);
+  float scaleFactor = 1.0f + 0.3f;  //* sinf(time * 2.0f);
   DirectX::SimpleMath::Matrix scaleMatrix =
       DirectX::SimpleMath::Matrix::CreateScale(scaleFactor);
   mWorld = scaleMatrix;
