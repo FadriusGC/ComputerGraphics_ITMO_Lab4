@@ -1,7 +1,7 @@
 #include "BoxApp.h"
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
+
+#include "ModelLoader.h"
+#include "ShaderHelper.h"
 
 BoxApp::BoxApp(HINSTANCE hInstance) : m_window(), mTimer() {
   mWorld = DirectX::SimpleMath::Matrix::Identity;
@@ -13,7 +13,7 @@ BoxApp::~BoxApp() { FlushCommandQueue(); }
 
 bool BoxApp::Initialize() {
   if (!m_window.Initialize(GetModuleHandle(nullptr), WIDTH, HEIGHT,
-                           L"Direct3D 12 Box with Phong Lighting")) {
+                           L"Direct3D 12 with Assimp Model Loading")) {
     return false;
   }
 
@@ -24,7 +24,6 @@ bool BoxApp::Initialize() {
   CreateRTVs();
   CreateDepthStencil();
 
-  // Создаем вьюпорт и ножницы
   mScreenViewport.TopLeftX = 0;
   mScreenViewport.TopLeftY = 0;
   mScreenViewport.Width = static_cast<float>(WIDTH);
@@ -34,39 +33,32 @@ bool BoxApp::Initialize() {
 
   mScissorRect = {0, 0, (LONG)WIDTH, (LONG)HEIGHT};
 
-  // Сброс командного списка для инициализации
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
 
   BuildRootSignature();
   BuildShadersAndInputLayout();
-  BuildBoxGeometry();
   BuildConstantBuffers();
   BuildPSO();
+  BuildBoxGeometry();  // загружаем модель
 
-  // Закрываем список команд
   ThrowIfFailed(mCommandList->Close());
 
-  // Выполняем команды инициализации
   ID3D12CommandList* cmdLists[] = {mCommandList.Get()};
   mCommandQueue->ExecuteCommandLists(1, cmdLists);
 
   FlushCommandQueue();
-
-  // Проекционная матрица
   OnResize();
 
   return true;
 }
 
 void BoxApp::OnResize() {
-  // Используем проекционную матрицу для левосторонней системы координат
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
       static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
 }
 
 void BoxApp::BuildDescriptorHeaps() {
-  // Куча RTV
   D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
   rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
   rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -74,7 +66,6 @@ void BoxApp::BuildDescriptorHeaps() {
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvHeap)));
 
-  // Куча DSV
   D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
   dsvHeapDesc.NumDescriptors = 1;
   dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -82,9 +73,8 @@ void BoxApp::BuildDescriptorHeaps() {
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mDsvHeap)));
 
-  // Куча CBV (для константных буферов)
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
-  cbvHeapDesc.NumDescriptors = 2;  // Два буфера: Object и Light
+  cbvHeapDesc.NumDescriptors = 2;
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -92,52 +82,38 @@ void BoxApp::BuildDescriptorHeaps() {
 }
 
 void BoxApp::BuildConstantBuffers() {
-  // Константный буфер для объекта (World и WorldViewProj)
   mObjectCB = std::unique_ptr<UploadBuffer<ObjectConstants>>(
       new UploadBuffer<ObjectConstants>(mDevice.Get(), 1, true));
-
-  // Константный буфер для параметров света
   mLightCB = std::unique_ptr<UploadBuffer<LightConstants>>(
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
 
-  // Описание CBV для ObjectConstants (register(b0))
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
   cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
-  cbvDescObject.SizeInBytes =
-      (sizeof(ObjectConstants) + 255) & ~255;  // Выравнивание до 256 байт
+  cbvDescObject.SizeInBytes = (sizeof(ObjectConstants) + 255) & ~255;
 
-  // Описание CBV для LightConstants (register(b1))
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescLight = {};
   cbvDescLight.BufferLocation = mLightCB->Resource()->GetGPUVirtualAddress();
-  cbvDescLight.SizeInBytes =
-      (sizeof(LightConstants) + 255) & ~255;  // Выравнивание до 256 байт
+  cbvDescLight.SizeInBytes = (sizeof(LightConstants) + 255) & ~255;
 
-  // Создаем CBV для ObjectConstants в начале кучи
   mDevice->CreateConstantBufferView(
       &cbvDescObject, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
 
-  // Создаем CBV для LightConstants со смещением
   CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
       mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
   mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
 }
 
 void BoxApp::BuildRootSignature() {
-  // Создаем два слота: один для ObjectConstants (b0), другой для LightConstants
-  // (b1)
   CD3DX12_ROOT_PARAMETER slotRootParameter[2];
 
-  // Слот 0: ObjectConstants (b0)
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable0);
 
-  // Слот 1: LightConstants (b1)
   CD3DX12_DESCRIPTOR_RANGE cbvTable1;
   cbvTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1);
   slotRootParameter[1].InitAsDescriptorTable(1, &cbvTable1);
 
-  // Описание корневой сигнатуры
   CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(
       2, slotRootParameter, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
@@ -159,141 +135,49 @@ void BoxApp::BuildRootSignature() {
 }
 
 void BoxApp::BuildShadersAndInputLayout() {
-  // Загружаем шейдеры из файлов
   try {
-    // читаем с файла
     mVSByteCode =
         ShaderHelper::CompileShader(L"BoxVertexShader.hlsl", "VS", "vs_5_0");
     mPSByteCode =
         ShaderHelper::CompileShader(L"BoxPixelShader.hlsl", "PS", "ps_5_0");
-
-    // на всякий случай
-    // mVSByteCode =
-    // ShaderHelper::CompileShaderFromSource(L"BoxVertexShader.hlsl", "VS",
-    // "vs_5_0"); mPSByteCode =
-    // ShaderHelper::CompileShaderFromSource(L"BoxPixelShader.hlsl", "PS",
-    // "ps_5_0");
   } catch (const std::exception& e) {
     MessageBoxA(nullptr, e.what(), "Shader Error", MB_OK | MB_ICONERROR);
     throw;
   }
 
-  // Входной лейаут
   mInputLayout = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
                   {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+                  {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 }
 
 void BoxApp::BuildBoxGeometry() {
-  // Создаем 24 вершины (по 4 на грань) для корректных нормалей
-  std::array<Vertex, 24> vertices = {
-      // Front (z = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 0: белый
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 1: черный
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 2: красный
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 3: зеленый
+  // Укажите правильный путь к вашей модели
+  std::string modelPath =
+      "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/sponza.obj";
 
-      // Back (z = 1)
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 4: синий
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 5: желтый
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 6: голубой
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 7: пурпурный
+  if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
+    MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
+                "Warning", MB_OK);
+    CreateFallbackCube();
+  } else {
+    char buf[256];
+    sprintf_s(buf, "Loaded %zu vertices, %zu indices\n",
+              mModelGeometry.Vertices.size(), mModelGeometry.Indices.size());
+    OutputDebugStringA(buf);
+  }
 
-      // Left (x = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 8
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 9
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 10
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 11
+  mVertexBufferByteSize =
+      (UINT)(mModelGeometry.Vertices.size() * sizeof(Vertex));
+  mIndexBufferByteSize =
+      (UINT)(mModelGeometry.Indices.size() * sizeof(uint32_t));
+  mIndexCount = (UINT)mModelGeometry.Indices.size();
 
-      // Right (x = 1)
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 12
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 13
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 14
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 15
-
-      // Top (y = 1)
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 16
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 17
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 18
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 19
-
-      // Bottom (y = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 20
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 21
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 22
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 23
-  };
-
-  // Индексы: по 6 индексов на грань (36 индексов всего)
-  std::array<uint16_t, 36> indices = {// Front face
-                                      0, 1, 2, 0, 2, 3,
-                                      // Back face
-                                      4, 5, 6, 4, 6, 7,
-                                      // Left face
-                                      8, 9, 10, 8, 10, 11,
-                                      // Right face
-                                      12, 13, 14, 12, 14, 15,
-                                      // Top face
-                                      16, 17, 18, 16, 18, 19,
-                                      // Bottom face
-                                      20, 21, 22, 20, 22, 23};
-
-  mVertexBufferByteSize = (UINT)(vertices.size() * sizeof(Vertex));
-  mIndexBufferByteSize = (UINT)(indices.size() * sizeof(uint16_t));
-  mIndexCount = (UINT)indices.size();
-
-  // Создаем вершинный буфер в GPU
+  // Вершинный буфер
   {
     D3D12_HEAP_PROPERTIES heapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -304,7 +188,6 @@ void BoxApp::BuildBoxGeometry() {
         &heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc,
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&mVertexBufferGPU)));
 
-    // Создаем промежуточный буфер для загрузки
     D3D12_HEAP_PROPERTIES uploadHeapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     ThrowIfFailed(mDevice->CreateCommittedResource(
@@ -312,9 +195,8 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&mVertexBufferUploader)));
 
-    // Копируем данные
     D3D12_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pData = vertices.data();
+    vertexData.pData = mModelGeometry.Vertices.data();
     vertexData.RowPitch = mVertexBufferByteSize;
     vertexData.SlicePitch = mVertexBufferByteSize;
 
@@ -326,13 +208,12 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     mCommandList->ResourceBarrier(1, &barrier);
 
-    // Создаем вью вершинного буфера
     mVertexBufferView.BufferLocation = mVertexBufferGPU->GetGPUVirtualAddress();
     mVertexBufferView.SizeInBytes = mVertexBufferByteSize;
     mVertexBufferView.StrideInBytes = sizeof(Vertex);
   }
 
-  // Создаем индексный буфер в GPU
+  // Индексный буфер
   {
     D3D12_HEAP_PROPERTIES heapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -351,7 +232,7 @@ void BoxApp::BuildBoxGeometry() {
         IID_PPV_ARGS(&mIndexBufferUploader)));
 
     D3D12_SUBRESOURCE_DATA indexData = {};
-    indexData.pData = indices.data();
+    indexData.pData = mModelGeometry.Indices.data();
     indexData.RowPitch = mIndexBufferByteSize;
     indexData.SlicePitch = mIndexBufferByteSize;
 
@@ -363,11 +244,129 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_INDEX_BUFFER);
     mCommandList->ResourceBarrier(1, &barrier);
 
-    // Создаем вью индексного буфера
     mIndexBufferView.BufferLocation = mIndexBufferGPU->GetGPUVirtualAddress();
     mIndexBufferView.SizeInBytes = mIndexBufferByteSize;
-    mIndexBufferView.Format = DXGI_FORMAT_R16_UINT;
+    mIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
   }
+}
+
+void BoxApp::CreateFallbackCube() {
+  std::array<Vertex, 24> vertices = {
+      // Front (z = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+
+      // Back (z = 1)
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Left (x = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Right (x = 1)
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Top (y = 1)
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+
+      // Bottom (y = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+  };
+
+  std::array<uint32_t, 36> indices = {
+      0,  1,  2,  0,  2,  3,  4,  5,  6,  4,  6,  7,  8,  9,  10, 8,  10, 11,
+      12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23};
+
+  mModelGeometry.Vertices.assign(vertices.begin(), vertices.end());
+  mModelGeometry.Indices.assign(indices.begin(), indices.end());
 }
 
 void BoxApp::BuildPSO() {
@@ -383,7 +382,6 @@ void BoxApp::BuildPSO() {
   CD3DX12_RASTERIZER_DESC rasterizerDesc(D3D12_DEFAULT);
   rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
   rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
-  rasterizerDesc.FrontCounterClockwise = FALSE;
 
   psoDesc.RasterizerState = rasterizerDesc;
   psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
@@ -528,37 +526,26 @@ void BoxApp::CreateDepthStencil() {
 }
 
 void BoxApp::Update(const GameTimer& gt) {
-  // Преобразуем сферические координаты в декартовы
   float x = mRadius * sinf(mPhi) * cosf(mTheta);
   float z = mRadius * sinf(mPhi) * sinf(mTheta);
   float y = mRadius * cosf(mPhi);
 
-  // Строим матрицу вида
   DirectX::SimpleMath::Vector3 pos(x, y, z);
   DirectX::SimpleMath::Vector3 target(0.0f, 0.0f, 0.0f);
   DirectX::SimpleMath::Vector3 up(0.0f, 1.0f, 0.0f);
 
   mView = DirectX::SimpleMath::Matrix::CreateLookAt(pos, target, up);
 
-  // Матрица мира
-  float time = static_cast<float>(gt.TotalTime());
-  float scaleFactor = 1.0f + 0.3f;  //* sinf(time * 2.0f);
-  DirectX::SimpleMath::Matrix scaleMatrix =
-      DirectX::SimpleMath::Matrix::CreateScale(scaleFactor);
-  mWorld = scaleMatrix;
+  float scale = 0.1f;  // подобрать надо
+  mWorld = DirectX::SimpleMath::Matrix::CreateScale(scale);
 
-  // Комбинируем матрицы
   DirectX::SimpleMath::Matrix worldViewProj = mWorld * mView * mProj;
 
-  // Обновляем константный буфер объекта
   ObjectConstants objConstants;
   objConstants.World = mWorld;
   objConstants.WorldViewProj = worldViewProj.Transpose();
-  objConstants.Time = time;
-  objConstants.ScaleFactor = scaleFactor;
   mObjectCB->CopyData(0, objConstants);
 
-  // Обновляем константный буфер света
   LightConstants lightConstants;
   lightConstants.LightPosition =
       DirectX::SimpleMath::Vector4(3.0f, 3.0f, 3.0f, 1.0f);
@@ -575,13 +562,11 @@ void BoxApp::Draw(const GameTimer& gt) {
   mCommandList->RSSetViewports(1, &mScreenViewport);
   mCommandList->RSSetScissorRects(1, &mScissorRect);
 
-  // Переход заднего буфера в состояние рендер-таргета
   auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(), D3D12_RESOURCE_STATE_PRESENT,
       D3D12_RESOURCE_STATE_RENDER_TARGET);
   mCommandList->ResourceBarrier(1, &barrier1);
 
-  // Очистка буферов
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = CurrentBackBufferView();
   D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = DepthStencilView();
 
@@ -591,34 +576,26 @@ void BoxApp::Draw(const GameTimer& gt) {
       dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0,
       nullptr);
 
-  // Устанавливаем рендер-таргеты
   mCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
 
-  // Устанавливаем дескрипторные кучи
   ID3D12DescriptorHeap* descriptorHeaps[] = {mCbvHeap.Get()};
   mCommandList->SetDescriptorHeaps(1, descriptorHeaps);
 
-  // Устанавливаем корневую сигнатуру
   mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
-  // Привязываем константные буферы: Object (b0) и Light (b1)
   mCommandList->SetGraphicsRootDescriptorTable(
-      0,
-      mCbvHeap->GetGPUDescriptorHandleForHeapStart());  // b0: ObjectConstants
+      0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
   mCommandList->SetGraphicsRootDescriptorTable(
       1, CD3DX12_GPU_DESCRIPTOR_HANDLE(
              mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1,
-             mCbvSrvDescriptorSize));  // b1: LightConstants
+             mCbvSrvDescriptorSize));
 
-  // Устанавливаем вершинный и индексный буферы
   mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
   mCommandList->IASetIndexBuffer(&mIndexBufferView);
   mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-  // Рисуем куб
   mCommandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
 
-  // Переход обратно в PRESENT
   auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(),
       D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -645,7 +622,6 @@ void BoxApp::OnMouseUp(WPARAM btnState, int x, int y) { ReleaseCapture(); }
 
 void BoxApp::OnMouseMove(WPARAM btnState, int x, int y) {
   if ((btnState & MK_LBUTTON) != 0) {
-    // Вращение камеры
     float dx = DirectX::XMConvertToRadians(
         0.25f * static_cast<float>(x - mLastMousePos.x));
     float dy = DirectX::XMConvertToRadians(
@@ -653,11 +629,8 @@ void BoxApp::OnMouseMove(WPARAM btnState, int x, int y) {
 
     mTheta += dx;
     mPhi += dy;
-
-    // Ограничиваем угол phi
     mPhi = clamp_val(mPhi, 0.1f, DirectX::XM_PI - 0.1f);
   } else if ((btnState & MK_RBUTTON) != 0) {
-    // Приближение/отдаление
     float dx = 0.005f * static_cast<float>(x - mLastMousePos.x);
     float dy = 0.005f * static_cast<float>(y - mLastMousePos.y);
 
@@ -675,7 +648,6 @@ int BoxApp::Run() {
 
   while (msg.message != WM_QUIT) {
     if (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
-      // Обработка сообщений мыши
       switch (msg.message) {
         case WM_LBUTTONDOWN:
         case WM_MBUTTONDOWN:
@@ -726,7 +698,7 @@ void BoxApp::CalculateFrameStats() {
     wstring mspfStr = std::to_wstring(mspf);
 
     wstring windowText =
-        L"Direct3D 12 Box    fps: " + fpsStr + L"   mspf: " + mspfStr;
+        L"Direct3D 12 with Assimp    fps: " + fpsStr + L"   mspf: " + mspfStr;
     SetWindowText(m_window.GetHWND(), windowText.c_str());
 
     frameCnt = 0;

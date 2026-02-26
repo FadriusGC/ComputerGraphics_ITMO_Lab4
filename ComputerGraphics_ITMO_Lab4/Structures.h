@@ -2,26 +2,28 @@
 
 #include <SimpleMath.h>
 
-// Структуры вершин и констант
+#include <cstdint>
+#include <vector>
+
 struct Vertex {
   DirectX::SimpleMath::Vector3 Pos;
-  DirectX::SimpleMath::Vector3 Normal;  // Нормали для корректного освещения
+  DirectX::SimpleMath::Vector3 Normal;
+  DirectX::SimpleMath::Vector2 TexC;  // текстурные координаты
   DirectX::SimpleMath::Vector4 Color;
 };
 
 struct ObjectConstants {
-  DirectX::SimpleMath::Matrix World;          // Матрица мира для трансформации
-  DirectX::SimpleMath::Matrix WorldViewProj;  // Матрица проекции
-  float Time;                                 // Время для анимации
-  float ScaleFactor;                          // Коэффициент масштабирования
-  DirectX::SimpleMath::Vector2 Padding;       // Выравнивание
+  DirectX::SimpleMath::Matrix World;
+  DirectX::SimpleMath::Matrix WorldViewProj;
 };
 
-// Структура для параметров света
 struct LightConstants {
-  DirectX::SimpleMath::Vector4
-      LightPosition;                        // Позиция света (x, y, z, w=1.0f)
-  DirectX::SimpleMath::Vector4 LightColor;  // Цвет света (r, g, b, a)
-  DirectX::SimpleMath::Vector4
-      CameraPosition;  // Позиция камеры для вычисления viewDir
+  DirectX::SimpleMath::Vector4 LightPosition;
+  DirectX::SimpleMath::Vector4 LightColor;
+  DirectX::SimpleMath::Vector4 CameraPosition;
+};
+
+struct ModelGeometry {
+  std::vector<Vertex> Vertices;
+  std::vector<uint32_t> Indices;
 };

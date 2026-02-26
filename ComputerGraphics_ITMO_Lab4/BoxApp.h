@@ -9,25 +9,16 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
-#include <cmath>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "Common.h"
 #include "D3DWindow.h"
 #include "GameTimer.h"
-#include "ShaderHelper.h"  // Добавляем заголовок для шейдеров
 #include "Structures.h"
 #include "UploadBuffer.h"
 #include "d3dx12.h"
-
-#pragma comment(lib, "d3d12.lib")
-#pragma comment(lib, "dxgi.lib")
-#pragma comment(lib, "d3dcompiler.lib")
-#pragma comment(lib, "dxguid.lib")
 
 using Microsoft::WRL::ComPtr;
 using std::wstring;
@@ -35,8 +26,6 @@ using std::wstring;
 class BoxApp {
  public:
   BoxApp(HINSTANCE hInstance);
-  BoxApp(const BoxApp& rhs) = delete;
-  BoxApp& operator=(const BoxApp& rhs) = delete;
   ~BoxApp();
 
   bool Initialize();
@@ -55,8 +44,20 @@ class BoxApp {
   void BuildConstantBuffers();
   void BuildRootSignature();
   void BuildShadersAndInputLayout();
-  void BuildBoxGeometry();
+  void BuildBoxGeometry();  // загружает модель или создаёт куб
   void BuildPSO();
+  void CreateFallbackCube();  // создаёт куб, если модель не загрузилась
+
+  void CreateDevice();
+  void CreateCommandObjects();
+  void CreateSwapChain();
+  void CreateRTVs();
+  void CreateDepthStencil();
+  void FlushCommandQueue();
+  void CalculateFrameStats();
+
+  D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
+  D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
 
   // D3D12 объекты
   ComPtr<IDXGIFactory4> mFactory;
@@ -85,10 +86,8 @@ class BoxApp {
   ComPtr<ID3DBlob> mPSByteCode;
 
   // Константные буферы
-  std::unique_ptr<UploadBuffer<ObjectConstants>>
-      mObjectCB;  // Для объекта (World, WorldViewProj, Time, ScaleFactor)
-  std::unique_ptr<UploadBuffer<LightConstants>>
-      mLightCB;  // Для параметров света
+  std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
+  std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
 
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
@@ -98,10 +97,9 @@ class BoxApp {
   UINT mDsvDescriptorSize = 0;
   UINT mCbvSrvDescriptorSize = 0;
 
-  // Статистика
+  // Видовые параметры
   D3D12_VIEWPORT mScreenViewport;
   D3D12_RECT mScissorRect;
-  UINT m4xMsaaQuality = 0;
   UINT64 mCurrentFence = 0;
   int mCurrBackBuffer = 0;
 
@@ -118,20 +116,11 @@ class BoxApp {
   float mRadius = 5.0f;
   POINT mLastMousePos;
 
-  // Геометрия куба
+  // Геометрия модели
+  ModelGeometry mModelGeometry;
   UINT mVertexBufferByteSize = 0;
   UINT mIndexBufferByteSize = 0;
   D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
   D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
   UINT mIndexCount = 0;
-
-  void CreateDevice();
-  void CreateCommandObjects();
-  void CreateSwapChain();
-  void CreateRTVs();
-  void CreateDepthStencil();
-  void FlushCommandQueue();
-  void CalculateFrameStats();
-  D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
-  D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
 };

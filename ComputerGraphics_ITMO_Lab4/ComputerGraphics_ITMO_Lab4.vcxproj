@@ -132,6 +132,7 @@
     <ClCompile Include="ComputerGraphics_ITMO_Lab4.cpp" />
     <ClCompile Include="D3DWindow.cpp" />
     <ClCompile Include="GameTimer.cpp" />
+    <ClCompile Include="ModelLoader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -141,6 +142,7 @@
     <ClInclude Include="Common.h" />
     <ClInclude Include="D3DWindow.h" />
     <ClInclude Include="GameTimer.h" />
+    <ClInclude Include="ModelLoader.h" />
     <ClInclude Include="ShaderHelper.h" />
     <ClInclude Include="Structures.h" />
     <ClInclude Include="UploadBuffer.h" />
