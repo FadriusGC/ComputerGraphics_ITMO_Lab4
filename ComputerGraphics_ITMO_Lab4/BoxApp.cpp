@@ -1,4 +1,7 @@
 #include "BoxApp.h"
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 
 BoxApp::BoxApp(HINSTANCE hInstance) : m_window(), mTimer() {
   mWorld = DirectX::SimpleMath::Matrix::Identity;
