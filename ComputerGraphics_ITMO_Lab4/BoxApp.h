@@ -16,7 +16,7 @@
 
 #include "Common.h"
 #include "D3DWindow.h"
-#include "DDSTextureLoader.h"  // для загрузки DDS
+#include "DDSTextureLoader.h"
 #include "GameTimer.h"
 #include "Structures.h"
 #include "UploadBuffer.h"
@@ -25,7 +25,7 @@
 using Microsoft::WRL::ComPtr;
 using std::wstring;
 
-// Вспомогательная структура для хранения текстуры (как у друга)
+// Структура для хранения текстуры
 struct Texture {
   std::string name;
   std::wstring filepath;
@@ -54,14 +54,18 @@ class BoxApp {
   void BuildConstantBuffers();
   void BuildRootSignature();
   void BuildShadersAndInputLayout();
-  void BuildBoxGeometry();  // загружает модель или создаёт куб
+  void BuildBoxGeometry();  // загружает модель, создаёт буферы и текстуры
   void BuildPSO();
   void CreateFallbackCube();  // создаёт куб, если модель не загрузилась
 
-  // Новые методы для текстур
-  void LoadTexture();        // загружает DDS файл
-  void CreateSRV();          // создаёт шейдерный ресурс (SRV) для текстуры
-  void CreateSamplerHeap();  // создаёт heap и сэмплер
+  // Загрузка текстур для всех материалов
+  void LoadAllTextures();
+
+  // Создание SRV для конкретной текстуры и размещение в куче по указанному
+  // индексу
+  void CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex);
+
+  void CreateSamplerHeap();
 
   void CreateDevice();
   void CreateCommandObjects();
@@ -84,7 +88,8 @@ class BoxApp {
   ComPtr<ID3D12Fence> mFence;
   ComPtr<ID3D12DescriptorHeap> mRtvHeap;
   ComPtr<ID3D12DescriptorHeap> mDsvHeap;
-  ComPtr<ID3D12DescriptorHeap> mCbvHeap;  // теперь 3 дескриптора: 2 CBV + 1 SRV
+  ComPtr<ID3D12DescriptorHeap>
+      mCbvHeap;  // первые 2: object CBV, light CBV, затем SRV текстур
   ComPtr<ID3D12DescriptorHeap> mSamplerHeap;  // отдельный heap для сэмплера
   ComPtr<ID3D12RootSignature> mRootSignature;
   ComPtr<ID3D12PipelineState> mPSO;
@@ -106,8 +111,8 @@ class BoxApp {
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
-  // Текстура
-  std::unique_ptr<Texture> mTexture;  // загруженная DDS текстура
+  // Вектор всех загруженных текстур (по одной на уникальный файл)
+  std::vector<std::unique_ptr<Texture>> mTextures;
 
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;

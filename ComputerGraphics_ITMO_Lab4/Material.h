@@ -12,6 +12,8 @@ struct MaterialConstants {
 
 struct Material {
   std::string Name;
-  int MatCBIndex = -1;  // индекс в константном буфере
+  int MatCBIndex = -1;           // индекс в константном буфере материалов
+  std::string DiffuseTexture;    // имя файла диффузной текстуры (из .mtl)
+  int DiffuseTextureIndex = -1;  // индекс в массиве mTextures (после загрузки)
   MaterialConstants Data;
 };

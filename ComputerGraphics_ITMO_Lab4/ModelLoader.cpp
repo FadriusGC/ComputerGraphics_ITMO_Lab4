@@ -65,10 +65,25 @@ bool ModelLoader::LoadModel(const std::string& filePath,
         material.Data.Roughness = 0.5f;
       }
 
+      // Диффузная текстура (map_Kd)
+      aiString texPath;
+      if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
+        // Извлекаем имя файла из полного пути
+        std::string fullPath = texPath.C_Str();
+        size_t lastSlash = fullPath.find_last_of("/\\");
+        if (lastSlash != std::string::npos) {
+          material.DiffuseTexture = fullPath.substr(lastSlash + 1);
+        } else {
+          material.DiffuseTexture = fullPath;
+        }
+        OutputDebugStringA(
+            ("Diffuse texture: " + material.DiffuseTexture + "\n").c_str());
+      }
+
       outModelGeometry.Materials.push_back(material);
     }
   } else {
-    // Материал по умолчанию
+    // Материал по умолчанию (без текстуры)
     Material defaultMat;
     defaultMat.Name = "Default";
     defaultMat.Data.DiffuseAlbedo = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);

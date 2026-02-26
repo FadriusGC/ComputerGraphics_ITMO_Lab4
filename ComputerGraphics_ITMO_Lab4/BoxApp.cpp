@@ -36,7 +36,7 @@ bool BoxApp::Initialize() {
   mScissorRect = {0, 0, (LONG)WIDTH, (LONG)HEIGHT};
 
   // После CreateDepthStencil command list уже выполнен, нужно сбросить
-  // аллокатор
+  // аллокатор и список
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
 
@@ -44,12 +44,13 @@ bool BoxApp::Initialize() {
   BuildShadersAndInputLayout();
   BuildConstantBuffers();
   BuildPSO();
-  BuildBoxGeometry();  // загружаем модель (внутри использует command list)
+  BuildBoxGeometry();  // загружает модель, создаёт буферы и текстуры
 
-  // Загружаем текстуру (тоже использует command list, но после неё будет сброс)
-  LoadTexture();
-  CreateSRV();
+  // Создаём сэмплер (не требует команд)
   CreateSamplerHeap();
+
+  // Закрываем и выполняем все накопленные команды (геометрия + текстуры)
+  ThrowIfFailed(mCommandList->Close());
 
   ID3D12CommandList* cmdLists[] = {mCommandList.Get()};
   mCommandQueue->ExecuteCommandLists(1, cmdLists);
@@ -82,7 +83,8 @@ void BoxApp::BuildDescriptorHeaps() {
       mDevice->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mDsvHeap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
-  cbvHeapDesc.NumDescriptors = 3;  // 2 CBV + 1 SRV
+  cbvHeapDesc.NumDescriptors =
+      128;  // достаточно для object CBV, light CBV и множества текстур
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -110,12 +112,16 @@ void BoxApp::BuildConstantBuffers() {
   cbvDescLight.BufferLocation = mLightCB->Resource()->GetGPUVirtualAddress();
   cbvDescLight.SizeInBytes = (sizeof(LightConstants) + 255) & ~255;
 
+  // Первый дескриптор – object CBV
   mDevice->CreateConstantBufferView(
       &cbvDescObject, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
 
+  // Второй дескриптор – light CBV
   CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
       mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
   mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
+
+  // Остальные дескрипторы будут использованы для текстур
 }
 
 void BoxApp::BuildRootSignature() {
@@ -181,7 +187,7 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath = "Old_TV.obj";
+  std::string modelPath = "Old_TV.obj";  // путь к модели
 
   if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
     MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
@@ -196,6 +202,7 @@ void BoxApp::BuildBoxGeometry() {
     OutputDebugStringA(buf);
   }
 
+  // Если материалов нет, создаём один по умолчанию (без текстуры)
   if (mModelGeometry.Materials.empty()) {
     Material defaultMat;
     defaultMat.Name = "Default";
@@ -205,6 +212,7 @@ void BoxApp::BuildBoxGeometry() {
     mModelGeometry.Materials.push_back(defaultMat);
   }
 
+  // Создаём буфер материалов
   UINT numMaterials = (UINT)mModelGeometry.Materials.size();
   mMaterialCB = std::unique_ptr<UploadBuffer<MaterialConstants>>(
       new UploadBuffer<MaterialConstants>(mDevice.Get(), numMaterials, true));
@@ -291,49 +299,219 @@ void BoxApp::BuildBoxGeometry() {
     mIndexBufferView.SizeInBytes = mIndexBufferByteSize;
     mIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
   }
+
+  // Загружаем все текстуры, связанные с материалами
+  LoadAllTextures();
 }
 
-void BoxApp::CreateFallbackCube() {}
+void BoxApp::CreateFallbackCube() {
+  std::array<Vertex, 24> vertices = {
+      // Front (z = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
 
-// ------------------- Новые методы для текстуры -------------------
+      // Back (z = 1)
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
 
-void BoxApp::LoadTexture() {
-  std::wstring texturePath = L"TV_Body_material_Base_Color.dds";
+      // Left (x = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
 
-  mTexture = std::make_unique<Texture>();
-  mTexture->name = "DiffuseMap";
-  mTexture->filepath = texturePath;
+      // Right (x = 1)
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
 
-  // Сбрасываем аллокатор и command list перед загрузкой
+      // Top (y = 1)
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
 
-  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
-      mDevice.Get(), mCommandList.Get(), texturePath.c_str(),
-      mTexture->Resource, mTexture->UploadHeap));
+      // Bottom (y = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+  };
 
-  ThrowIfFailed(mCommandList->Close());
+  std::array<uint32_t, 36> indices = {
+      0,  1,  2,  0,  2,  3,  4,  5,  6,  4,  6,  7,  8,  9,  10, 8,  10, 11,
+      12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23};
 
-  ID3D12CommandList* cmdLists[] = {mCommandList.Get()};
-  mCommandQueue->ExecuteCommandLists(1, cmdLists);
+  mModelGeometry.Vertices.assign(vertices.begin(), vertices.end());
+  mModelGeometry.Indices.assign(indices.begin(), indices.end());
 
-  FlushCommandQueue();
+  // Создаём один сабмеш
+  Submesh submesh;
+  submesh.MaterialIndex = 0;
+  submesh.IndexCount = 36;
+  submesh.StartIndexLocation = 0;
+  mModelGeometry.Submeshes.push_back(submesh);
 
-  OutputDebugStringA("Texture loaded successfully\n");
+  // Создаём материал по умолчанию
+  Material defaultMat;
+  defaultMat.Name = "CubeMaterial";
+  defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
+  defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
+  defaultMat.Data.Roughness = 0.25f;
+  mModelGeometry.Materials.push_back(defaultMat);
 }
 
-void BoxApp::CreateSRV() {
+// ------------------- Загрузка текстур для всех материалов -------------------
+
+void BoxApp::LoadAllTextures() {
+  // Собираем уникальные пути текстур из материалов
+  std::unordered_map<std::string, int>
+      textureNameToIndex;  // имя файла -> индекс в mTextures
+  std::vector<std::string> uniqueTexturePaths;
+
+  for (auto& mat : mModelGeometry.Materials) {
+    if (!mat.DiffuseTexture.empty()) {
+      if (textureNameToIndex.find(mat.DiffuseTexture) ==
+          textureNameToIndex.end()) {
+        int index = (int)uniqueTexturePaths.size();
+        textureNameToIndex[mat.DiffuseTexture] = index;
+        uniqueTexturePaths.push_back(mat.DiffuseTexture);
+      }
+    }
+  }
+
+  if (uniqueTexturePaths.empty()) {
+    OutputDebugStringA("No diffuse textures found.\n");
+    return;
+  }
+
+  // Загружаем текстуры, используя открытый командный список
+  for (const auto& texName : uniqueTexturePaths) {
+    // Формируем полный путь к текстуре (предполагаем, что они в папке textures)
+    std::wstring fullPath =
+        L"textures/" + std::wstring(texName.begin(), texName.end());
+
+    auto texture = std::make_unique<Texture>();
+    texture->name = texName;
+    texture->filepath = fullPath;
+
+    ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+        mDevice.Get(), mCommandList.Get(), fullPath.c_str(), texture->Resource,
+        texture->UploadHeap));
+
+    // Сохраняем текстуру в вектор
+    int textureIndex = (int)mTextures.size();
+    mTextures.push_back(std::move(texture));
+
+    // Создаём SRV для этой текстуры в куче по индексу (2 + textureIndex)
+    CreateSRV(mTextures[textureIndex]->Resource, 2 + textureIndex);
+  }
+
+  // После загрузки всех текстур связываем материалы с индексами текстур
+  for (auto& mat : mModelGeometry.Materials) {
+    if (!mat.DiffuseTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.DiffuseTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.DiffuseTextureIndex = it->second;
+      }
+    }
+  }
+
+  OutputDebugStringA(
+      ("Loaded " + std::to_string(mTextures.size()) + " textures.\n").c_str());
+}
+
+void BoxApp::CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex) {
   CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(
-      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 2, mCbvSrvDescriptorSize);
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), heapIndex,
+      mCbvSrvDescriptorSize);
 
   D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
   srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  srvDesc.Format = mTexture->Resource->GetDesc().Format;
+  srvDesc.Format = textureResource->GetDesc().Format;
   srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
   srvDesc.Texture2D.MostDetailedMip = 0;
-  srvDesc.Texture2D.MipLevels = mTexture->Resource->GetDesc().MipLevels;
+  srvDesc.Texture2D.MipLevels = textureResource->GetDesc().MipLevels;
   srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
-  mDevice->CreateShaderResourceView(mTexture->Resource.Get(), &srvDesc,
-                                    srvHandle);
+  mDevice->CreateShaderResourceView(textureResource.Get(), &srvDesc, srvHandle);
 }
 
 void BoxApp::CreateSamplerHeap() {
@@ -501,6 +679,7 @@ void BoxApp::CreateDepthStencil() {
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
       D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
+  // Используем command list для барьера
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
   mCommandList->ResourceBarrier(1, &barrier);
@@ -570,6 +749,7 @@ void BoxApp::Draw(const GameTimer& gt) {
 
   mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
+  // Постоянные таблицы: object CBV (слот 0) и light CBV (слот 1)
   mCommandList->SetGraphicsRootDescriptorTable(
       0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
 
@@ -577,10 +757,7 @@ void BoxApp::Draw(const GameTimer& gt) {
       mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
   mCommandList->SetGraphicsRootDescriptorTable(1, lightCbvHandle);
 
-  CD3DX12_GPU_DESCRIPTOR_HANDLE srvHandle(
-      mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 2, mCbvSrvDescriptorSize);
-  mCommandList->SetGraphicsRootDescriptorTable(2, srvHandle);
-
+  // Сэмплер (слот 3) – постоянный для всех вызовов отрисовки
   mCommandList->SetGraphicsRootDescriptorTable(
       3, mSamplerHeap->GetGPUDescriptorHandleForHeapStart());
 
@@ -589,13 +766,30 @@ void BoxApp::Draw(const GameTimer& gt) {
   mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
   UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
+
+  // Проходим по всем сабмешам
   for (const auto& submesh : mModelGeometry.Submeshes) {
     if (submesh.MaterialIndex < mModelGeometry.Materials.size()) {
-      int cbIndex = mModelGeometry.Materials[submesh.MaterialIndex].MatCBIndex;
+      const auto& mat = mModelGeometry.Materials[submesh.MaterialIndex];
+
+      // Устанавливаем константный буфер материала (слот 4)
+      int cbIndex = mat.MatCBIndex;
       D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
           mMaterialCB->Resource()->GetGPUVirtualAddress() +
           cbIndex * cbMaterialSize;
       mCommandList->SetGraphicsRootConstantBufferView(4, matCBAddress);
+
+      // Устанавливаем дескриптор текстуры (слот 2), если есть
+      if (mat.DiffuseTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(
+            mCbvHeap->GetGPUDescriptorHandleForHeapStart(),
+            2 + mat.DiffuseTextureIndex, mCbvSrvDescriptorSize);
+        mCommandList->SetGraphicsRootDescriptorTable(2, texHandle);
+      } else {
+        // Если текстуры нет – можно установить заглушку. Пока просто оставим
+        // последний установленный. В идеале создать белую текстуру и
+        // использовать её как заглушку.
+      }
     }
 
     mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1,
