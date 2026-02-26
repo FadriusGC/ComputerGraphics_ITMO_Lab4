@@ -11,10 +11,12 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "Common.h"
 #include "D3DWindow.h"
+#include "DDSTextureLoader.h"  // для загрузки DDS
 #include "GameTimer.h"
 #include "Structures.h"
 #include "UploadBuffer.h"
@@ -22,6 +24,14 @@
 
 using Microsoft::WRL::ComPtr;
 using std::wstring;
+
+// Вспомогательная структура для хранения текстуры (как у друга)
+struct Texture {
+  std::string name;
+  std::wstring filepath;
+  ComPtr<ID3D12Resource> Resource = nullptr;
+  ComPtr<ID3D12Resource> UploadHeap = nullptr;
+};
 
 class BoxApp {
  public:
@@ -48,6 +58,11 @@ class BoxApp {
   void BuildPSO();
   void CreateFallbackCube();  // создаёт куб, если модель не загрузилась
 
+  // Новые методы для текстур
+  void LoadTexture();        // загружает DDS файл
+  void CreateSRV();          // создаёт шейдерный ресурс (SRV) для текстуры
+  void CreateSamplerHeap();  // создаёт heap и сэмплер
+
   void CreateDevice();
   void CreateCommandObjects();
   void CreateSwapChain();
@@ -69,7 +84,8 @@ class BoxApp {
   ComPtr<ID3D12Fence> mFence;
   ComPtr<ID3D12DescriptorHeap> mRtvHeap;
   ComPtr<ID3D12DescriptorHeap> mDsvHeap;
-  ComPtr<ID3D12DescriptorHeap> mCbvHeap;
+  ComPtr<ID3D12DescriptorHeap> mCbvHeap;  // теперь 3 дескриптора: 2 CBV + 1 SRV
+  ComPtr<ID3D12DescriptorHeap> mSamplerHeap;  // отдельный heap для сэмплера
   ComPtr<ID3D12RootSignature> mRootSignature;
   ComPtr<ID3D12PipelineState> mPSO;
   ComPtr<ID3D12Resource> mSwapChainBuffers[SwapChainBufferCount];
@@ -89,6 +105,9 @@ class BoxApp {
   std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
+
+  // Текстура
+  std::unique_ptr<Texture> mTexture;  // загруженная DDS текстура
 
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;

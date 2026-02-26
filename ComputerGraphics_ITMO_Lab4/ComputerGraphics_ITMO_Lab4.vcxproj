@@ -131,6 +131,7 @@
     <ClCompile Include="BoxApp.cpp" />
     <ClCompile Include="ComputerGraphics_ITMO_Lab4.cpp" />
     <ClCompile Include="D3DWindow.cpp" />
+    <ClCompile Include="DDSTextureLoader.cpp" />
     <ClCompile Include="GameTimer.cpp" />
     <ClCompile Include="ModelLoader.cpp" />
   </ItemGroup>
@@ -141,6 +142,7 @@
     <ClInclude Include="BoxApp.h" />
     <ClInclude Include="Common.h" />
     <ClInclude Include="D3DWindow.h" />
+    <ClInclude Include="DDSTextureLoader.h" />
     <ClInclude Include="GameTimer.h" />
     <ClInclude Include="Material.h" />
     <ClInclude Include="ModelLoader.h" />
