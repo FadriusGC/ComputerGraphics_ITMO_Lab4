@@ -88,6 +88,7 @@ class BoxApp {
   // Константные буферы
   std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
+  std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;

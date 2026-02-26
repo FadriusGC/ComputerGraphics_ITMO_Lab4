@@ -142,6 +142,7 @@
     <ClInclude Include="Common.h" />
     <ClInclude Include="D3DWindow.h" />
     <ClInclude Include="GameTimer.h" />
+    <ClInclude Include="Material.h" />
     <ClInclude Include="ModelLoader.h" />
     <ClInclude Include="ShaderHelper.h" />
     <ClInclude Include="Structures.h" />

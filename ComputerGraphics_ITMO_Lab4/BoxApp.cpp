@@ -1,5 +1,6 @@
 #include "BoxApp.h"
 
+#include "Material.h"
 #include "ModelLoader.h"
 #include "ShaderHelper.h"
 
@@ -13,7 +14,7 @@ BoxApp::~BoxApp() { FlushCommandQueue(); }
 
 bool BoxApp::Initialize() {
   if (!m_window.Initialize(GetModuleHandle(nullptr), WIDTH, HEIGHT,
-                           L"Direct3D 12 with Assimp Model Loading")) {
+                           L"Direct3D 12 with Assimp Model UBEITE MENYA PZH")) {
     return false;
   }
 
@@ -104,18 +105,23 @@ void BoxApp::BuildConstantBuffers() {
 }
 
 void BoxApp::BuildRootSignature() {
-  CD3DX12_ROOT_PARAMETER slotRootParameter[2];
+  CD3DX12_ROOT_PARAMETER slotRootParameter[3];
 
+  // Таблица для cbPerObject (b0)
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable0);
 
+  // Таблица для cbLight (b1)
   CD3DX12_DESCRIPTOR_RANGE cbvTable1;
   cbvTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1);
   slotRootParameter[1].InitAsDescriptorTable(1, &cbvTable1);
 
+  // Корневой дескриптор для cbMaterial (b2)
+  slotRootParameter[2].InitAsConstantBufferView(2);
+
   CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(
-      2, slotRootParameter, 0, nullptr,
+      3, slotRootParameter, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serializedRootSig = nullptr;
@@ -156,7 +162,6 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  // Укажите правильный путь к вашей модели
   std::string modelPath =
       "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/sponza.obj";
 
@@ -166,9 +171,32 @@ void BoxApp::BuildBoxGeometry() {
     CreateFallbackCube();
   } else {
     char buf[256];
-    sprintf_s(buf, "Loaded %zu vertices, %zu indices\n",
-              mModelGeometry.Vertices.size(), mModelGeometry.Indices.size());
+    sprintf_s(
+        buf, "Loaded %zu vertices, %zu indices, %zu submeshes, %zu materials\n",
+        mModelGeometry.Vertices.size(), mModelGeometry.Indices.size(),
+        mModelGeometry.Submeshes.size(), mModelGeometry.Materials.size());
     OutputDebugStringA(buf);
+  }
+
+  // Если материалов нет, создаём один по умолчанию
+  if (mModelGeometry.Materials.empty()) {
+    Material defaultMat;
+    defaultMat.Name = "Default";
+    defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
+    defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
+    defaultMat.Data.Roughness = 0.25f;
+    mModelGeometry.Materials.push_back(defaultMat);
+  }
+
+  // Создаём буфер материалов
+  UINT numMaterials = (UINT)mModelGeometry.Materials.size();
+  mMaterialCB = std::unique_ptr<UploadBuffer<MaterialConstants>>(
+      new UploadBuffer<MaterialConstants>(mDevice.Get(), numMaterials, true));
+
+  // Заполняем буфер и сохраняем индексы
+  for (UINT i = 0; i < numMaterials; ++i) {
+    mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
+    mModelGeometry.Materials[i].MatCBIndex = i;
   }
 
   mVertexBufferByteSize =
@@ -367,6 +395,21 @@ void BoxApp::CreateFallbackCube() {
 
   mModelGeometry.Vertices.assign(vertices.begin(), vertices.end());
   mModelGeometry.Indices.assign(indices.begin(), indices.end());
+
+  // Создаём один сабмеш
+  Submesh submesh;
+  submesh.MaterialIndex = 0;
+  submesh.IndexCount = 36;
+  submesh.StartIndexLocation = 0;
+  mModelGeometry.Submeshes.push_back(submesh);
+
+  // Создаём материал по умолчанию
+  Material defaultMat;
+  defaultMat.Name = "CubeMaterial";
+  defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
+  defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
+  defaultMat.Data.Roughness = 0.25f;
+  mModelGeometry.Materials.push_back(defaultMat);
 }
 
 void BoxApp::BuildPSO() {
@@ -583,6 +626,8 @@ void BoxApp::Draw(const GameTimer& gt) {
 
   mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
+  // Устанавливаем таблицы для cbPerObject и cbLight (не меняются для всей
+  // модели)
   mCommandList->SetGraphicsRootDescriptorTable(
       0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
   mCommandList->SetGraphicsRootDescriptorTable(
@@ -590,11 +635,27 @@ void BoxApp::Draw(const GameTimer& gt) {
              mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1,
              mCbvSrvDescriptorSize));
 
+  // Вершинный и индексный буферы (общие для всех сабмешей)
   mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
   mCommandList->IASetIndexBuffer(&mIndexBufferView);
   mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-  mCommandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
+  // Рисуем все сабмеши
+  UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
+  for (const auto& submesh : mModelGeometry.Submeshes) {
+    // Проверяем, что индекс материала в пределах массива
+    if (submesh.MaterialIndex < mModelGeometry.Materials.size()) {
+      int cbIndex = mModelGeometry.Materials[submesh.MaterialIndex].MatCBIndex;
+      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
+          mMaterialCB->Resource()->GetGPUVirtualAddress() +
+          cbIndex * cbMaterialSize;
+      mCommandList->SetGraphicsRootConstantBufferView(2, matCBAddress);
+    } else {
+    }
+
+    mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                       submesh.StartIndexLocation, 0, 0);
+  }
 
   auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(),
