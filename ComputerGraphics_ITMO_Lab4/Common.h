@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SimpleMath.h>
+#include <comdef.h>  // для _com_error
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
@@ -25,15 +26,23 @@
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 
-// Макрос для проверки HRESULT
+
 #define ThrowIfFailed(x)                                                     \
-  {                                                                          \
+  do {                                                                       \
     HRESULT hr__ = (x);                                                      \
     if (FAILED(hr__)) {                                                      \
-      MessageBox(nullptr, L"DirectX Error", L"Error", MB_OK | MB_ICONERROR); \
+      std::stringstream ss__;                                                \
+      ss__ << "Error at " << __FILE__ << "(" << __LINE__ << ") in function " \
+           << __FUNCTION__ << ": ";                                          \
+      _com_error err__(hr__);                                                \
+      ss__ << "HRESULT 0x" << std::hex << hr__ << std::dec << " - "          \
+           << err__.ErrorMessage();                                          \
+      std::string msg__ = ss__.str();                                        \
+      MessageBoxA(nullptr, msg__.c_str(), "DirectX Error",                   \
+                  MB_OK | MB_ICONERROR);                                     \
       std::terminate();                                                      \
     }                                                                        \
-  }
+  } while (false)
 
 // clamp для C++14
 template <typename T>

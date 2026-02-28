@@ -1,9 +1,18 @@
-#include "BoxApp.h"
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
+п»ї#include "BoxApp.h"
 
-BoxApp::BoxApp(HINSTANCE hInstance) : m_window(), mTimer() {
+#include "DDSTextureLoader.h"
+#include "Material.h"
+#include "ModelLoader.h"
+#include "ShaderHelper.h"
+
+BoxApp::BoxApp(HINSTANCE hInstance)
+    : m_window(),
+      mTimer(),
+      mCamPos(0.0f, 2.0f, -5.0f),  // РЅР°С‡Р°Р»СЊРЅР°СЏ РїРѕР·РёС†РёСЏ РєР°РјРµСЂС‹
+      mCamYaw(0.0f),
+      mCamPitch(0.0f),
+      mMoveSpeed(25.0f),
+      mMouseSensitivity(0.002f) {
   mWorld = DirectX::SimpleMath::Matrix::Identity;
   mView = DirectX::SimpleMath::Matrix::Identity;
   mProj = DirectX::SimpleMath::Matrix::Identity;
@@ -13,7 +22,7 @@ BoxApp::~BoxApp() { FlushCommandQueue(); }
 
 bool BoxApp::Initialize() {
   if (!m_window.Initialize(GetModuleHandle(nullptr), WIDTH, HEIGHT,
-                           L"Direct3D 12 Box with Phong Lighting")) {
+                           L"Direct3D 12 with Assimp Model UBEITE MENYA PZH")) {
     return false;
   }
 
@@ -24,7 +33,6 @@ bool BoxApp::Initialize() {
   CreateRTVs();
   CreateDepthStencil();
 
-  // Создаем вьюпорт и ножницы
   mScreenViewport.TopLeftX = 0;
   mScreenViewport.TopLeftY = 0;
   mScreenViewport.Width = static_cast<float>(WIDTH);
@@ -34,39 +42,36 @@ bool BoxApp::Initialize() {
 
   mScissorRect = {0, 0, (LONG)WIDTH, (LONG)HEIGHT};
 
-  // Сброс командного списка для инициализации
+  ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
 
   BuildRootSignature();
   BuildShadersAndInputLayout();
-  BuildBoxGeometry();
   BuildConstantBuffers();
   BuildPSO();
+  BuildBoxGeometry();  // Р·Р°РіСЂСѓР¶Р°РµС‚ РјРѕРґРµР»СЊ, СЃРѕР·РґР°С‘С‚ Р±СѓС„РµСЂС‹ Рё С‚РµРєСЃС‚СѓСЂС‹
 
-  // Закрываем список команд
+  // РЎРѕР·РґР°С‘Рј СЃСЌРјРїР»РµСЂ
+  CreateSamplerHeap();
+  // Р—Р°РєСЂС‹РІР°РµРј Рё РІС‹РїРѕР»РЅСЏРµРј РІСЃРµ РЅР°РєРѕРїР»РµРЅРЅС‹Рµ РєРѕРјР°РЅРґС‹ (РіРµРѕРјРµС‚СЂРёСЏ + С‚РµРєСЃС‚СѓСЂС‹)
   ThrowIfFailed(mCommandList->Close());
 
-  // Выполняем команды инициализации
   ID3D12CommandList* cmdLists[] = {mCommandList.Get()};
   mCommandQueue->ExecuteCommandLists(1, cmdLists);
 
   FlushCommandQueue();
-
-  // Проекционная матрица
   OnResize();
 
   return true;
 }
 
 void BoxApp::OnResize() {
-  // Используем проекционную матрицу для левосторонней системы координат
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
       static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
 }
 
 void BoxApp::BuildDescriptorHeaps() {
-  // Куча RTV
   D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
   rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
   rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -74,7 +79,6 @@ void BoxApp::BuildDescriptorHeaps() {
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvHeap)));
 
-  // Куча DSV
   D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
   dsvHeapDesc.NumDescriptors = 1;
   dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -82,64 +86,69 @@ void BoxApp::BuildDescriptorHeaps() {
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mDsvHeap)));
 
-  // Куча CBV (для константных буферов)
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
-  cbvHeapDesc.NumDescriptors = 2;  // Два буфера: Object и Light
+  cbvHeapDesc.NumDescriptors =
+      128;  // РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РґР»СЏ object CBV, light CBV Рё РјРЅРѕР¶РµСЃС‚РІР° С‚РµРєСЃС‚СѓСЂ
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
       mDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap)));
+
+  D3D12_DESCRIPTOR_HEAP_DESC samplerHeapDesc = {};
+  samplerHeapDesc.NumDescriptors = 1;
+  samplerHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+  samplerHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+  ThrowIfFailed(mDevice->CreateDescriptorHeap(&samplerHeapDesc,
+                                              IID_PPV_ARGS(&mSamplerHeap)));
 }
 
 void BoxApp::BuildConstantBuffers() {
-  // Константный буфер для объекта (World и WorldViewProj)
   mObjectCB = std::unique_ptr<UploadBuffer<ObjectConstants>>(
       new UploadBuffer<ObjectConstants>(mDevice.Get(), 1, true));
-
-  // Константный буфер для параметров света
   mLightCB = std::unique_ptr<UploadBuffer<LightConstants>>(
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
 
-  // Описание CBV для ObjectConstants (register(b0))
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
   cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
-  cbvDescObject.SizeInBytes =
-      (sizeof(ObjectConstants) + 255) & ~255;  // Выравнивание до 256 байт
+  cbvDescObject.SizeInBytes = (sizeof(ObjectConstants) + 255) & ~255;
 
-  // Описание CBV для LightConstants (register(b1))
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescLight = {};
   cbvDescLight.BufferLocation = mLightCB->Resource()->GetGPUVirtualAddress();
-  cbvDescLight.SizeInBytes =
-      (sizeof(LightConstants) + 255) & ~255;  // Выравнивание до 256 байт
+  cbvDescLight.SizeInBytes = (sizeof(LightConstants) + 255) & ~255;
 
-  // Создаем CBV для ObjectConstants в начале кучи
+  // РџРµСЂРІС‹Р№ РґРµСЃРєСЂРёРїС‚РѕСЂ вЂ“ object CBV
   mDevice->CreateConstantBufferView(
       &cbvDescObject, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
 
-  // Создаем CBV для LightConstants со смещением
+  // Р’С‚РѕСЂРѕР№ РґРµСЃРєСЂРёРїС‚РѕСЂ вЂ“ light CBV
   CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
       mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
   mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
 }
 
 void BoxApp::BuildRootSignature() {
-  // Создаем два слота: один для ObjectConstants (b0), другой для LightConstants
-  // (b1)
-  CD3DX12_ROOT_PARAMETER slotRootParameter[2];
+  CD3DX12_ROOT_PARAMETER slotRootParameter[5];
 
-  // Слот 0: ObjectConstants (b0)
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable0);
 
-  // Слот 1: LightConstants (b1)
   CD3DX12_DESCRIPTOR_RANGE cbvTable1;
   cbvTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1);
   slotRootParameter[1].InitAsDescriptorTable(1, &cbvTable1);
 
-  // Описание корневой сигнатуры
+  CD3DX12_DESCRIPTOR_RANGE srvTable;
+  srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+  slotRootParameter[2].InitAsDescriptorTable(1, &srvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE samplerTable;
+  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
+  slotRootParameter[3].InitAsDescriptorTable(1, &samplerTable);
+
+  slotRootParameter[4].InitAsConstantBufferView(2);
+
   CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(
-      2, slotRootParameter, 0, nullptr,
+      5, slotRootParameter, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serializedRootSig = nullptr;
@@ -159,141 +168,68 @@ void BoxApp::BuildRootSignature() {
 }
 
 void BoxApp::BuildShadersAndInputLayout() {
-  // Загружаем шейдеры из файлов
   try {
-    // читаем с файла
     mVSByteCode =
         ShaderHelper::CompileShader(L"BoxVertexShader.hlsl", "VS", "vs_5_0");
     mPSByteCode =
         ShaderHelper::CompileShader(L"BoxPixelShader.hlsl", "PS", "ps_5_0");
-
-    // на всякий случай
-    // mVSByteCode =
-    // ShaderHelper::CompileShaderFromSource(L"BoxVertexShader.hlsl", "VS",
-    // "vs_5_0"); mPSByteCode =
-    // ShaderHelper::CompileShaderFromSource(L"BoxPixelShader.hlsl", "PS",
-    // "ps_5_0");
   } catch (const std::exception& e) {
     MessageBoxA(nullptr, e.what(), "Shader Error", MB_OK | MB_ICONERROR);
     throw;
   }
 
-  // Входной лейаут
   mInputLayout = {{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
                   {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+                  {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 }
 
 void BoxApp::BuildBoxGeometry() {
-  // Создаем 24 вершины (по 4 на грань) для корректных нормалей
-  std::array<Vertex, 24> vertices = {
-      // Front (z = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 0: белый
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 1: черный
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 2: красный
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {0.0f, 0.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 3: зеленый
+  std::string modelPath = "sponza.obj";
 
-      // Back (z = 1)
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 4: синий
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 5: желтый
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 6: голубой
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {0.0f, 0.0f, 1.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 7: пурпурный
+  if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
+    MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
+                "Warning", MB_OK);
+    CreateFallbackCube();
+  } else {
+    char buf[256];
+    sprintf_s(
+        buf, "Loaded %zu vertices, %zu indices, %zu submeshes, %zu materials\n",
+        mModelGeometry.Vertices.size(), mModelGeometry.Indices.size(),
+        mModelGeometry.Submeshes.size(), mModelGeometry.Materials.size());
+    OutputDebugStringA(buf);
+  }
 
-      // Left (x = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 8
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 9
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 10
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {-1.0f, 0.0f, 0.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 11
+  if (mModelGeometry.Materials.empty()) {
+    Material defaultMat;
+    defaultMat.Name = "Default";
+    defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
+    defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
+    defaultMat.Data.Roughness = 0.25f;
+    mModelGeometry.Materials.push_back(defaultMat);
+  }
 
-      // Right (x = 1)
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 12
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 13
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 14
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {1.0f, 0.0f, 0.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 15
+  // РЎРѕР·РґР°С‘Рј Р±СѓС„РµСЂ РјР°С‚РµСЂРёР°Р»РѕРІ
+  UINT numMaterials = (UINT)mModelGeometry.Materials.size();
+  mMaterialCB = std::unique_ptr<UploadBuffer<MaterialConstants>>(
+      new UploadBuffer<MaterialConstants>(mDevice.Get(), numMaterials, true));
 
-      // Top (y = 1)
-      Vertex({{-1.0f, 1.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {0.0f, 0.0f, 0.0f, 1.0f}}),  // 16
-      Vertex({{-1.0f, 1.0f, 1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {1.0f, 1.0f, 0.0f, 1.0f}}),  // 17
-      Vertex({{1.0f, 1.0f, 1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {0.0f, 1.0f, 1.0f, 1.0f}}),  // 18
-      Vertex({{1.0f, 1.0f, -1.0f},
-              {0.0f, 1.0f, 0.0f},
-              {1.0f, 0.0f, 0.0f, 1.0f}}),  // 19
+  for (UINT i = 0; i < numMaterials; ++i) {
+    mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
+    mModelGeometry.Materials[i].MatCBIndex = i;
+  }
 
-      // Bottom (y = -1)
-      Vertex({{-1.0f, -1.0f, -1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {1.0f, 1.0f, 1.0f, 1.0f}}),  // 20
-      Vertex({{-1.0f, -1.0f, 1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {0.0f, 0.0f, 1.0f, 1.0f}}),  // 21
-      Vertex({{1.0f, -1.0f, 1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {1.0f, 0.0f, 1.0f, 1.0f}}),  // 22
-      Vertex({{1.0f, -1.0f, -1.0f},
-              {0.0f, -1.0f, 0.0f},
-              {0.0f, 1.0f, 0.0f, 1.0f}}),  // 23
-  };
+  mVertexBufferByteSize =
+      (UINT)(mModelGeometry.Vertices.size() * sizeof(Vertex));
+  mIndexBufferByteSize =
+      (UINT)(mModelGeometry.Indices.size() * sizeof(uint32_t));
+  mIndexCount = (UINT)mModelGeometry.Indices.size();
 
-  // Индексы: по 6 индексов на грань (36 индексов всего)
-  std::array<uint16_t, 36> indices = {// Front face
-                                      0, 1, 2, 0, 2, 3,
-                                      // Back face
-                                      4, 5, 6, 4, 6, 7,
-                                      // Left face
-                                      8, 9, 10, 8, 10, 11,
-                                      // Right face
-                                      12, 13, 14, 12, 14, 15,
-                                      // Top face
-                                      16, 17, 18, 16, 18, 19,
-                                      // Bottom face
-                                      20, 21, 22, 20, 22, 23};
-
-  mVertexBufferByteSize = (UINT)(vertices.size() * sizeof(Vertex));
-  mIndexBufferByteSize = (UINT)(indices.size() * sizeof(uint16_t));
-  mIndexCount = (UINT)indices.size();
-
-  // Создаем вершинный буфер в GPU
+  // Р’РµСЂС€РёРЅРЅС‹Р№ Р±СѓС„РµСЂ
   {
     D3D12_HEAP_PROPERTIES heapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -304,7 +240,6 @@ void BoxApp::BuildBoxGeometry() {
         &heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc,
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&mVertexBufferGPU)));
 
-    // Создаем промежуточный буфер для загрузки
     D3D12_HEAP_PROPERTIES uploadHeapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     ThrowIfFailed(mDevice->CreateCommittedResource(
@@ -312,9 +247,8 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&mVertexBufferUploader)));
 
-    // Копируем данные
     D3D12_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pData = vertices.data();
+    vertexData.pData = mModelGeometry.Vertices.data();
     vertexData.RowPitch = mVertexBufferByteSize;
     vertexData.SlicePitch = mVertexBufferByteSize;
 
@@ -326,13 +260,12 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     mCommandList->ResourceBarrier(1, &barrier);
 
-    // Создаем вью вершинного буфера
     mVertexBufferView.BufferLocation = mVertexBufferGPU->GetGPUVirtualAddress();
     mVertexBufferView.SizeInBytes = mVertexBufferByteSize;
     mVertexBufferView.StrideInBytes = sizeof(Vertex);
   }
 
-  // Создаем индексный буфер в GPU
+  // РРЅРґРµРєСЃРЅС‹Р№ Р±СѓС„РµСЂ
   {
     D3D12_HEAP_PROPERTIES heapProps =
         CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -351,7 +284,7 @@ void BoxApp::BuildBoxGeometry() {
         IID_PPV_ARGS(&mIndexBufferUploader)));
 
     D3D12_SUBRESOURCE_DATA indexData = {};
-    indexData.pData = indices.data();
+    indexData.pData = mModelGeometry.Indices.data();
     indexData.RowPitch = mIndexBufferByteSize;
     indexData.SlicePitch = mIndexBufferByteSize;
 
@@ -363,11 +296,239 @@ void BoxApp::BuildBoxGeometry() {
         D3D12_RESOURCE_STATE_INDEX_BUFFER);
     mCommandList->ResourceBarrier(1, &barrier);
 
-    // Создаем вью индексного буфера
     mIndexBufferView.BufferLocation = mIndexBufferGPU->GetGPUVirtualAddress();
     mIndexBufferView.SizeInBytes = mIndexBufferByteSize;
-    mIndexBufferView.Format = DXGI_FORMAT_R16_UINT;
+    mIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
   }
+
+  // Р—Р°РіСЂСѓР¶Р°РµРј РІСЃРµ С‚РµРєСЃС‚СѓСЂС‹, СЃРІСЏР·Р°РЅРЅС‹Рµ СЃ РјР°С‚РµСЂРёР°Р»Р°РјРё
+  LoadAllTextures();
+}
+
+void BoxApp::CreateFallbackCube() {
+  std::array<Vertex, 24> vertices = {
+      // Front (z = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, 0.0f, -1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+
+      // Back (z = 1)
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Left (x = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {-1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Right (x = 1)
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {1.0f, 0.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f},
+              {0.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+
+      // Top (y = 1)
+      Vertex({{-1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 0.0f, 0.0f, 1.0f}}),
+      Vertex({{-1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 0.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, 1.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 0.0f, 1.0f}}),
+
+      // Bottom (y = -1)
+      Vertex({{-1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 0.0f},
+              {1.0f, 1.0f, 1.0f, 1.0f}}),
+      Vertex({{-1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 0.0f},
+              {0.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, 1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {1.0f, 1.0f},
+              {1.0f, 0.0f, 1.0f, 1.0f}}),
+      Vertex({{1.0f, -1.0f, -1.0f},
+              {0.0f, -1.0f, 0.0f},
+              {0.0f, 1.0f},
+              {0.0f, 1.0f, 0.0f, 1.0f}}),
+  };
+
+  std::array<uint32_t, 36> indices = {
+      0,  1,  2,  0,  2,  3,  4,  5,  6,  4,  6,  7,  8,  9,  10, 8,  10, 11,
+      12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23};
+
+  mModelGeometry.Vertices.assign(vertices.begin(), vertices.end());
+  mModelGeometry.Indices.assign(indices.begin(), indices.end());
+
+  // РЎРѕР·РґР°С‘Рј РѕРґРёРЅ СЃР°Р±РјРµС€
+  Submesh submesh;
+  submesh.MaterialIndex = 0;
+  submesh.IndexCount = 36;
+  submesh.StartIndexLocation = 0;
+  mModelGeometry.Submeshes.push_back(submesh);
+
+  Material defaultMat;
+  defaultMat.Name = "CubeMaterial";
+  defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
+  defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
+  defaultMat.Data.Roughness = 0.25f;
+  defaultMat.Data.TexTransform = DirectX::SimpleMath::Matrix::Identity;
+  mModelGeometry.Materials.push_back(defaultMat);
+}
+
+// Р—Р°РіСЂСѓР·РєР° С‚РµРєСЃС‚СѓСЂ РґР»СЏ РІСЃРµС… РјР°С‚РµСЂРёР°Р»РѕРІ
+
+void BoxApp::LoadAllTextures() {
+  // РЎРѕР±РёСЂР°РµРј СѓРЅРёРєР°Р»СЊРЅС‹Рµ РїСѓС‚Рё С‚РµРєСЃС‚СѓСЂ РёР· РјР°С‚РµСЂРёР°Р»РѕРІ
+  std::unordered_map<std::string, int>
+      textureNameToIndex;  // РёРјСЏ С„Р°Р№Р»Р° -> РёРЅРґРµРєСЃ РІ mTextures
+  std::vector<std::string> uniqueTexturePaths;
+
+  for (auto& mat : mModelGeometry.Materials) {
+    if (!mat.DiffuseTexture.empty()) {
+      if (textureNameToIndex.find(mat.DiffuseTexture) ==
+          textureNameToIndex.end()) {
+        int index = (int)uniqueTexturePaths.size();
+        textureNameToIndex[mat.DiffuseTexture] = index;
+        uniqueTexturePaths.push_back(mat.DiffuseTexture);
+      }
+    }
+  }
+
+  if (uniqueTexturePaths.empty()) {
+    OutputDebugStringA("No diffuse textures found.\n");
+    return;
+  }
+
+  // Р—Р°РіСЂСѓР¶Р°РµРј С‚РµРєСЃС‚СѓСЂС‹
+  for (const auto& texName : uniqueTexturePaths) {
+    // Р¤РѕСЂРјРёСЂСѓРµРј РїРѕР»РЅС‹Р№ РїСѓС‚СЊ Рє С‚РµРєСЃС‚СѓСЂРµ
+    std::wstring fullPath =
+        L"textures/" + std::wstring(texName.begin(), texName.end());
+
+    auto texture = std::make_unique<Texture>();
+    texture->name = texName;
+    texture->filepath = fullPath;
+
+    ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+        mDevice.Get(), mCommandList.Get(), fullPath.c_str(), texture->Resource,
+        texture->UploadHeap));
+
+    // РЎРѕС…СЂР°РЅСЏРµРј С‚РµРєСЃС‚СѓСЂСѓ РІ РІРµРєС‚РѕСЂ
+    int textureIndex = (int)mTextures.size();
+    mTextures.push_back(std::move(texture));
+
+    // РЎРѕР·РґР°С‘Рј SRV РґР»СЏ СЌС‚РѕР№ С‚РµРєСЃС‚СѓСЂС‹ РІ РєСѓС‡Рµ РїРѕ РёРЅРґРµРєСЃСѓ (2 + textureIndex)
+    CreateSRV(mTextures[textureIndex]->Resource, 2 + textureIndex);
+  }
+
+  // РџРѕСЃР»Рµ Р·Р°РіСЂСѓР·РєРё РІСЃРµС… С‚РµРєСЃС‚СѓСЂ СЃРІСЏР·С‹РІР°РµРј РјР°С‚РµСЂРёР°Р»С‹ СЃ РёРЅРґРµРєСЃР°РјРё С‚РµРєСЃС‚СѓСЂ
+  for (auto& mat : mModelGeometry.Materials) {
+    if (!mat.DiffuseTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.DiffuseTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.DiffuseTextureIndex = it->second;
+      }
+    }
+  }
+
+  OutputDebugStringA(
+      ("Loaded " + std::to_string(mTextures.size()) + " textures.\n").c_str());
+}
+
+void BoxApp::CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex) {
+  CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), heapIndex,
+      mCbvSrvDescriptorSize);
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = textureResource->GetDesc().Format;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDesc.Texture2D.MostDetailedMip = 0;
+  srvDesc.Texture2D.MipLevels = textureResource->GetDesc().MipLevels;
+  srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+  mDevice->CreateShaderResourceView(textureResource.Get(), &srvDesc, srvHandle);
+}
+
+void BoxApp::CreateSamplerHeap() {
+  D3D12_SAMPLER_DESC samplerDesc = {};
+  samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+  samplerDesc.MinLOD = 0;
+  samplerDesc.MaxLOD = D3D12_FLOAT32_MAX;
+  samplerDesc.MipLODBias = 0.0f;
+  samplerDesc.MaxAnisotropy = 1;
+  samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+  mDevice->CreateSampler(&samplerDesc,
+                         mSamplerHeap->GetCPUDescriptorHandleForHeapStart());
 }
 
 void BoxApp::BuildPSO() {
@@ -383,7 +544,6 @@ void BoxApp::BuildPSO() {
   CD3DX12_RASTERIZER_DESC rasterizerDesc(D3D12_DEFAULT);
   rasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
   rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
-  rasterizerDesc.FrontCounterClockwise = FALSE;
 
   psoDesc.RasterizerState = rasterizerDesc;
   psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
@@ -518,6 +678,7 @@ void BoxApp::CreateDepthStencil() {
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
       D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
+  ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
   mCommandList->ResourceBarrier(1, &barrier);
   ThrowIfFailed(mCommandList->Close());
@@ -528,44 +689,88 @@ void BoxApp::CreateDepthStencil() {
 }
 
 void BoxApp::Update(const GameTimer& gt) {
-  // Преобразуем сферические координаты в декартовы
-  float x = mRadius * sinf(mPhi) * cosf(mTheta);
-  float z = mRadius * sinf(mPhi) * sinf(mTheta);
-  float y = mRadius * cosf(mPhi);
+  // С„СЂРёРєР°Рј
+  if (GetActiveWindow() == m_window.GetHWND()) {
+    DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
+                                         sinf(mCamPitch),
+                                         cosf(mCamPitch) * cosf(mCamYaw));
+    lookDir.Normalize();
 
-  // Строим матрицу вида
-  DirectX::SimpleMath::Vector3 pos(x, y, z);
-  DirectX::SimpleMath::Vector3 target(0.0f, 0.0f, 0.0f);
-  DirectX::SimpleMath::Vector3 up(0.0f, 1.0f, 0.0f);
+    DirectX::SimpleMath::Vector3 up(0.0f, 1.0f, 0.0f);
+    DirectX::SimpleMath::Vector3 right = lookDir.Cross(up);
+    right.Normalize();
 
-  mView = DirectX::SimpleMath::Matrix::CreateLookAt(pos, target, up);
+    // РџРµСЂРµРјРµС‰РµРЅРёРµ
+    float speed = mMoveSpeed * gt.DeltaTime();
 
-  // Матрица мира
-  float time = static_cast<float>(gt.TotalTime());
-  float scaleFactor = 1.0f + 0.3f;  //* sinf(time * 2.0f);
-  DirectX::SimpleMath::Matrix scaleMatrix =
-      DirectX::SimpleMath::Matrix::CreateScale(scaleFactor);
-  mWorld = scaleMatrix;
+    if (GetAsyncKeyState('W') & 0x8000) mCamPos += lookDir * speed;
+    if (GetAsyncKeyState('S') & 0x8000) mCamPos -= lookDir * speed;
+    if (GetAsyncKeyState('A') & 0x8000) mCamPos -= right * speed;
+    if (GetAsyncKeyState('D') & 0x8000) mCamPos += right * speed;
+    if (GetAsyncKeyState('Q') & 0x8000)  // РІРІРµСЂС…
+      mCamPos.y += speed;
+    if (GetAsyncKeyState('E') & 0x8000)  // РІРЅРёР·
+      mCamPos.y -= speed;
+  }
 
-  // Комбинируем матрицы
+  // РЎС‚СЂРѕРёРј РјР°С‚СЂРёС†Сѓ РІРёРґР°
+  DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
+                                       sinf(mCamPitch),
+                                       cosf(mCamPitch) * cosf(mCamYaw));
+  lookDir.Normalize();
+  DirectX::SimpleMath::Vector3 target = mCamPos + lookDir;
+  mView = DirectX::SimpleMath::Matrix::CreateLookAt(
+      mCamPos, target, DirectX::SimpleMath::Vector3(0.0f, 1.0f, 0.0f));
+
+  // РњР°С‚СЂРёС†Р° РјРёСЂР°
+  float scale = 0.5f;
+  mWorld = DirectX::SimpleMath::Matrix::CreateScale(scale);
+
   DirectX::SimpleMath::Matrix worldViewProj = mWorld * mView * mProj;
 
-  // Обновляем константный буфер объекта
   ObjectConstants objConstants;
   objConstants.World = mWorld;
   objConstants.WorldViewProj = worldViewProj.Transpose();
-  objConstants.Time = time;
-  objConstants.ScaleFactor = scaleFactor;
   mObjectCB->CopyData(0, objConstants);
 
-  // Обновляем константный буфер света
   LightConstants lightConstants;
   lightConstants.LightPosition =
       DirectX::SimpleMath::Vector4(3.0f, 3.0f, 3.0f, 1.0f);
   lightConstants.LightColor =
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
-  lightConstants.CameraPosition = DirectX::SimpleMath::Vector4(x, y, z, 1.0f);
+  lightConstants.CameraPosition =
+      DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
   mLightCB->CopyData(0, lightConstants);
+
+  static float time = 0.0f;
+  time += gt.DeltaTime();
+
+  for (size_t i = 0; i < mModelGeometry.Materials.size(); ++i) {
+    auto& mat = mModelGeometry.Materials[i];
+    auto& matData = mat.Data;
+
+    if (mat.Name == "bricks") {
+      // РўР°Р№Р»РёРЅРі Рё РІСЂР°С‰РµРЅРёРµ С‚РѕР»СЊРєРѕ РґР»СЏ СЃС‚РµРЅС‹
+      float scaleU = 15.0f;
+      float scaleV = 15.0f;
+      float angle = time * 0.8f;
+
+      DirectX::SimpleMath::Matrix rotation =
+          DirectX::SimpleMath::Matrix::CreateRotationZ(angle);
+      DirectX::SimpleMath::Matrix transform =
+          DirectX::SimpleMath::Matrix::CreateTranslation(-0.5f, -0.5f, 0.0f) *
+          rotation *
+          DirectX::SimpleMath::Matrix::CreateTranslation(0.5f, 0.5f, 0.0f) *
+          DirectX::SimpleMath::Matrix::CreateScale(scaleU, scaleV, 1.0f);
+
+      matData.TexTransform = transform;
+    } else {
+      // Р’СЃРµ РѕСЃС‚Р°Р»СЊРЅС‹Рµ РјР°С‚РµСЂРёР°Р»С‹ Р±РµР· С‚СЂР°РЅСЃС„РѕСЂРјР°С†РёРё
+      matData.TexTransform = DirectX::SimpleMath::Matrix::Identity;
+    }
+
+    mMaterialCB->CopyData(static_cast<int>(i), matData);
+  }
 }
 
 void BoxApp::Draw(const GameTimer& gt) {
@@ -575,13 +780,11 @@ void BoxApp::Draw(const GameTimer& gt) {
   mCommandList->RSSetViewports(1, &mScreenViewport);
   mCommandList->RSSetScissorRects(1, &mScissorRect);
 
-  // Переход заднего буфера в состояние рендер-таргета
   auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(), D3D12_RESOURCE_STATE_PRESENT,
       D3D12_RESOURCE_STATE_RENDER_TARGET);
   mCommandList->ResourceBarrier(1, &barrier1);
 
-  // Очистка буферов
   D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = CurrentBackBufferView();
   D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = DepthStencilView();
 
@@ -591,34 +794,58 @@ void BoxApp::Draw(const GameTimer& gt) {
       dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0,
       nullptr);
 
-  // Устанавливаем рендер-таргеты
   mCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
 
-  // Устанавливаем дескрипторные кучи
-  ID3D12DescriptorHeap* descriptorHeaps[] = {mCbvHeap.Get()};
-  mCommandList->SetDescriptorHeaps(1, descriptorHeaps);
+  ID3D12DescriptorHeap* descriptorHeaps[] = {mCbvHeap.Get(),
+                                             mSamplerHeap.Get()};
+  mCommandList->SetDescriptorHeaps(2, descriptorHeaps);
 
-  // Устанавливаем корневую сигнатуру
   mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
-  // Привязываем константные буферы: Object (b0) и Light (b1)
+  // РџРѕСЃС‚РѕСЏРЅРЅС‹Рµ С‚Р°Р±Р»РёС†С‹: object CBV (СЃР»РѕС‚ 0) Рё light CBV (СЃР»РѕС‚ 1)
   mCommandList->SetGraphicsRootDescriptorTable(
-      0,
-      mCbvHeap->GetGPUDescriptorHandleForHeapStart());  // b0: ObjectConstants
-  mCommandList->SetGraphicsRootDescriptorTable(
-      1, CD3DX12_GPU_DESCRIPTOR_HANDLE(
-             mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1,
-             mCbvSrvDescriptorSize));  // b1: LightConstants
+      0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
 
-  // Устанавливаем вершинный и индексный буферы
+  CD3DX12_GPU_DESCRIPTOR_HANDLE lightCbvHandle(
+      mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
+  mCommandList->SetGraphicsRootDescriptorTable(1, lightCbvHandle);
+
+  // РЎСЌРјРїР»РµСЂ (СЃР»РѕС‚ 3) вЂ“ РїРѕСЃС‚РѕСЏРЅРЅС‹Р№ РґР»СЏ РІСЃРµС… РІС‹Р·РѕРІРѕРІ РѕС‚СЂРёСЃРѕРІРєРё
+  mCommandList->SetGraphicsRootDescriptorTable(
+      3, mSamplerHeap->GetGPUDescriptorHandleForHeapStart());
+
   mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
   mCommandList->IASetIndexBuffer(&mIndexBufferView);
   mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-  // Рисуем куб
-  mCommandList->DrawIndexedInstanced(mIndexCount, 1, 0, 0, 0);
+  UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
 
-  // Переход обратно в PRESENT
+  // РџСЂРѕС…РѕРґРёРј РїРѕ РІСЃРµРј СЃР°Р±РјРµС€Р°Рј
+  for (const auto& submesh : mModelGeometry.Submeshes) {
+    if (submesh.MaterialIndex < mModelGeometry.Materials.size()) {
+      const auto& mat = mModelGeometry.Materials[submesh.MaterialIndex];
+
+      // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РєРѕРЅСЃС‚Р°РЅС‚РЅС‹Р№ Р±СѓС„РµСЂ РјР°С‚РµСЂРёР°Р»Р° (СЃР»РѕС‚ 4)
+      int cbIndex = mat.MatCBIndex;
+      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
+          mMaterialCB->Resource()->GetGPUVirtualAddress() +
+          cbIndex * cbMaterialSize;
+      mCommandList->SetGraphicsRootConstantBufferView(4, matCBAddress);
+
+      // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РґРµСЃРєСЂРёРїС‚РѕСЂ С‚РµРєСЃС‚СѓСЂС‹ (СЃР»РѕС‚ 2)
+      if (mat.DiffuseTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(
+            mCbvHeap->GetGPUDescriptorHandleForHeapStart(),
+            2 + mat.DiffuseTextureIndex, mCbvSrvDescriptorSize);
+        mCommandList->SetGraphicsRootDescriptorTable(2, texHandle);
+      } else {
+      }
+    }
+
+    mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                       submesh.StartIndexLocation, 0, 0);
+  }
+
   auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(),
       D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -645,28 +872,19 @@ void BoxApp::OnMouseUp(WPARAM btnState, int x, int y) { ReleaseCapture(); }
 
 void BoxApp::OnMouseMove(WPARAM btnState, int x, int y) {
   if ((btnState & MK_LBUTTON) != 0) {
-    // Вращение камеры
-    float dx = DirectX::XMConvertToRadians(
-        0.25f * static_cast<float>(x - mLastMousePos.x));
-    float dy = DirectX::XMConvertToRadians(
-        0.25f * static_cast<float>(y - mLastMousePos.y));
+    float dx = static_cast<float>(x - mLastMousePos.x) * mMouseSensitivity;
+    float dy = static_cast<float>(y - mLastMousePos.y) * mMouseSensitivity;
 
-    mTheta += dx;
-    mPhi += dy;
+    mCamYaw += dx;
+    mCamPitch += dy;
 
-    // Ограничиваем угол phi
-    mPhi = clamp_val(mPhi, 0.1f, DirectX::XM_PI - 0.1f);
-  } else if ((btnState & MK_RBUTTON) != 0) {
-    // Приближение/отдаление
-    float dx = 0.005f * static_cast<float>(x - mLastMousePos.x);
-    float dy = 0.005f * static_cast<float>(y - mLastMousePos.y);
+    const float pitchLimit = DirectX::XM_PIDIV2 - 0.01f;
+    if (mCamPitch > pitchLimit) mCamPitch = pitchLimit;
+    if (mCamPitch < -pitchLimit) mCamPitch = -pitchLimit;
 
-    mRadius += dx - dy;
-    mRadius = clamp_val(mRadius, 3.0f, 15.0f);
+    mLastMousePos.x = x;
+    mLastMousePos.y = y;
   }
-
-  mLastMousePos.x = x;
-  mLastMousePos.y = y;
 }
 
 int BoxApp::Run() {
@@ -675,7 +893,6 @@ int BoxApp::Run() {
 
   while (msg.message != WM_QUIT) {
     if (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
-      // Обработка сообщений мыши
       switch (msg.message) {
         case WM_LBUTTONDOWN:
         case WM_MBUTTONDOWN:
@@ -726,7 +943,7 @@ void BoxApp::CalculateFrameStats() {
     wstring mspfStr = std::to_wstring(mspf);
 
     wstring windowText =
-        L"Direct3D 12 Box    fps: " + fpsStr + L"   mspf: " + mspfStr;
+        L"Direct3D 12 with Assimp    fps: " + fpsStr + L"   mspf: " + mspfStr;
     SetWindowText(m_window.GetHWND(), windowText.c_str());
 
     frameCnt = 0;
