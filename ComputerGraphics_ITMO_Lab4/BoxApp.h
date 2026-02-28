@@ -111,7 +111,7 @@ class BoxApp {
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
-  // Вектор всех загруженных текстур (по одной на уникальный файл)
+  // Вектор всех загруженных текстур
   std::vector<std::unique_ptr<Texture>> mTextures;
 
   // Входной лейаут
@@ -132,14 +132,18 @@ class BoxApp {
   D3DWindow m_window;
   GameTimer mTimer;
 
-  // Матрицы и камера
+  // Матрицы
   DirectX::SimpleMath::Matrix mWorld;
   DirectX::SimpleMath::Matrix mView;
   DirectX::SimpleMath::Matrix mProj;
-  float mTheta = 1.5f * DirectX::XM_PI;
-  float mPhi = DirectX::XM_PIDIV4;
-  float mRadius = 5.0f;
-  POINT mLastMousePos;
+
+  // фрикам
+  DirectX::SimpleMath::Vector3 mCamPos; 
+  float mCamYaw;                        
+  float mCamPitch;                    
+  float mMoveSpeed;                   
+  float mMouseSensitivity;             
+  POINT mLastMousePos;                  
 
   // Геометрия модели
   ModelGeometry mModelGeometry;

@@ -26,7 +26,7 @@
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 
-// Расширенный макрос проверки HRESULT с указанием файла, строки и функции
+
 #define ThrowIfFailed(x)                                                     \
   do {                                                                       \
     HRESULT hr__ = (x);                                                      \
