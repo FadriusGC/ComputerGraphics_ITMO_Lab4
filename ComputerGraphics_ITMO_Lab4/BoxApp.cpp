@@ -746,16 +746,28 @@ void BoxApp::Update(const GameTimer& gt) {
   time += gt.DeltaTime();
 
   for (size_t i = 0; i < mModelGeometry.Materials.size(); ++i) {
-    auto& matData = mModelGeometry.Materials[i].Data;
+    auto& mat = mModelGeometry.Materials[i];
+    auto& matData = mat.Data;
 
-    float scaleU = 5.0f + sinf(time * 1.5f) * 0.5f;
-    float scaleV = 5.0f + cosf(time * 1.2f) * 0.5f;
-    float offsetU = sinf(time * 0.8f) * 0.5f;
-    float offsetV = cosf(time * 0.6f) * 0.5f;
+    if (mat.Name == "bricks") {
+      // Тайлинг и вращение только для стены
+      float scaleU = 15.0f;
+      float scaleV = 15.0f;
+      float angle = time * 0.8f;
 
-    matData.TexTransform =
-        DirectX::SimpleMath::Matrix::CreateScale(scaleU, scaleV, 1.0f) *
-        DirectX::SimpleMath::Matrix::CreateTranslation(offsetU, offsetV, 0.0f);
+      DirectX::SimpleMath::Matrix rotation =
+          DirectX::SimpleMath::Matrix::CreateRotationZ(angle);
+      DirectX::SimpleMath::Matrix transform =
+          DirectX::SimpleMath::Matrix::CreateTranslation(-0.5f, -0.5f, 0.0f) *
+          rotation *
+          DirectX::SimpleMath::Matrix::CreateTranslation(0.5f, 0.5f, 0.0f) *
+          DirectX::SimpleMath::Matrix::CreateScale(scaleU, scaleV, 1.0f);
+
+      matData.TexTransform = transform;
+    } else {
+      // Все остальные материалы без трансформации
+      matData.TexTransform = DirectX::SimpleMath::Matrix::Identity;
+    }
 
     mMaterialCB->CopyData(static_cast<int>(i), matData);
   }
