@@ -16,6 +16,7 @@ cbuffer cbMaterial : register(b2) {
     float4 gDiffuseAlbedo;
     float3 gFresnelR0;
     float gRoughness;
+    float4x4 gTexTransform;   // <-- Добавлено: матрица трансформации текстуры
 };
 
 // Текстура и сэмплер
@@ -23,8 +24,11 @@ Texture2D gDiffuseMap : register(t0);
 SamplerState gSampler : register(s0);
 
 float4 PS(PS_INPUT input) : SV_Target {
+    // Трансформируем текстурные координаты с помощью матрицы
+    float2 transformedTexC = mul(float4(input.TexC, 0.0f, 1.0f), gTexTransform).xy;
+    
     // Цвет из текстуры
-    float4 texColor = gDiffuseMap.Sample(gSampler, input.TexC);
+    float4 texColor = gDiffuseMap.Sample(gSampler, transformedTexC);
     
     // Модулируем диффузный цвет материала текстурой
     float3 albedo = gDiffuseAlbedo.rgb * texColor.rgb;

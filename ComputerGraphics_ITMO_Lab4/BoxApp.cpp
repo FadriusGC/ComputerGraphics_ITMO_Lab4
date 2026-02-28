@@ -35,8 +35,6 @@ bool BoxApp::Initialize() {
 
   mScissorRect = {0, 0, (LONG)WIDTH, (LONG)HEIGHT};
 
-  // После CreateDepthStencil command list уже выполнен, нужно сбросить
-  // аллокатор и список
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
 
@@ -46,9 +44,8 @@ bool BoxApp::Initialize() {
   BuildPSO();
   BuildBoxGeometry();  // загружает модель, создаёт буферы и текстуры
 
-  // Создаём сэмплер (не требует команд)
+  // Создаём сэмплер
   CreateSamplerHeap();
-
   // Закрываем и выполняем все накопленные команды (геометрия + текстуры)
   ThrowIfFailed(mCommandList->Close());
 
@@ -120,8 +117,6 @@ void BoxApp::BuildConstantBuffers() {
   CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
       mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
   mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
-
-  // Остальные дескрипторы будут использованы для текстур
 }
 
 void BoxApp::BuildRootSignature() {
@@ -187,7 +182,7 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath = "Old_TV.obj";  // путь к модели
+  std::string modelPath = "Old_TV.obj";
 
   if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
     MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
@@ -202,7 +197,6 @@ void BoxApp::BuildBoxGeometry() {
     OutputDebugStringA(buf);
   }
 
-  // Если материалов нет, создаём один по умолчанию (без текстуры)
   if (mModelGeometry.Materials.empty()) {
     Material defaultMat;
     defaultMat.Name = "Default";
@@ -429,16 +423,16 @@ void BoxApp::CreateFallbackCube() {
   submesh.StartIndexLocation = 0;
   mModelGeometry.Submeshes.push_back(submesh);
 
-  // Создаём материал по умолчанию
   Material defaultMat;
   defaultMat.Name = "CubeMaterial";
   defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
   defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
   defaultMat.Data.Roughness = 0.25f;
+  defaultMat.Data.TexTransform = DirectX::SimpleMath::Matrix::Identity;
   mModelGeometry.Materials.push_back(defaultMat);
 }
 
-// ------------------- Загрузка текстур для всех материалов -------------------
+// Загрузка текстур для всех материалов
 
 void BoxApp::LoadAllTextures() {
   // Собираем уникальные пути текстур из материалов
@@ -462,9 +456,9 @@ void BoxApp::LoadAllTextures() {
     return;
   }
 
-  // Загружаем текстуры, используя открытый командный список
+  // Загружаем текстуры
   for (const auto& texName : uniqueTexturePaths) {
-    // Формируем полный путь к текстуре (предполагаем, что они в папке textures)
+    // Формируем полный путь к текстуре
     std::wstring fullPath =
         L"textures/" + std::wstring(texName.begin(), texName.end());
 
@@ -529,8 +523,6 @@ void BoxApp::CreateSamplerHeap() {
   mDevice->CreateSampler(&samplerDesc,
                          mSamplerHeap->GetCPUDescriptorHandleForHeapStart());
 }
-
-// ----------------------------------------------------------------
 
 void BoxApp::BuildPSO() {
   D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -679,7 +671,6 @@ void BoxApp::CreateDepthStencil() {
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
       D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-  // Используем command list для барьера
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
   mCommandList->ResourceBarrier(1, &barrier);
@@ -718,6 +709,27 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
   lightConstants.CameraPosition = DirectX::SimpleMath::Vector4(x, y, z, 1.0f);
   mLightCB->CopyData(0, lightConstants);
+
+  // Анимация трансформации текстур и тайлинг
+  static float time = 0.0f;
+  time += gt.DeltaTime();
+
+  for (size_t i = 0; i < mModelGeometry.Materials.size(); ++i) {
+    auto& matData = mModelGeometry.Materials[i].Data;
+
+    // параметры тайлинга масштаб и смещение, изменяющиеся во времени
+    float scaleU = 5.0f + sinf(time * 1.5f) * 0.5f;
+    float scaleV = 5.0f + cosf(time * 1.2f) * 0.5f;
+    float offsetU = sinf(time * 0.8f) * 0.5f;
+    float offsetV = cosf(time * 0.6f) * 0.5f;
+
+    // матрица сначала масштабирование, затем смещение
+    matData.TexTransform =
+        DirectX::SimpleMath::Matrix::CreateScale(scaleU, scaleV, 1.0f) *
+        DirectX::SimpleMath::Matrix::CreateTranslation(offsetU, offsetV, 0.0f);
+
+    mMaterialCB->CopyData(static_cast<int>(i), matData);
+  }
 }
 
 void BoxApp::Draw(const GameTimer& gt) {
@@ -786,9 +798,6 @@ void BoxApp::Draw(const GameTimer& gt) {
             2 + mat.DiffuseTextureIndex, mCbvSrvDescriptorSize);
         mCommandList->SetGraphicsRootDescriptorTable(2, texHandle);
       } else {
-        // Если текстуры нет – можно установить заглушку. Пока просто оставим
-        // последний установленный. В идеале создать белую текстуру и
-        // использовать её как заглушку.
       }
     }
 

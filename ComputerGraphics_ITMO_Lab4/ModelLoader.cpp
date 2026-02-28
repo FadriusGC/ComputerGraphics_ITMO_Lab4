@@ -65,6 +65,9 @@ bool ModelLoader::LoadModel(const std::string& filePath,
         material.Data.Roughness = 0.5f;
       }
 
+      // <-- Инициализация матрицы трансформации текстуры
+      material.Data.TexTransform = DirectX::SimpleMath::Matrix::Identity;
+
       // Диффузная текстура (map_Kd)
       aiString texPath;
       if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
@@ -89,6 +92,8 @@ bool ModelLoader::LoadModel(const std::string& filePath,
     defaultMat.Data.DiffuseAlbedo = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
     defaultMat.Data.FresnelR0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
     defaultMat.Data.Roughness = 0.25f;
+    defaultMat.Data.TexTransform =
+        DirectX::SimpleMath::Matrix::Identity;  // <--
     outModelGeometry.Materials.push_back(defaultMat);
   }
 
