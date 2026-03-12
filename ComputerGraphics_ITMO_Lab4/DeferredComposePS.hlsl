@@ -14,7 +14,7 @@ static const uint LIGHT_TYPE_SPOT = 2;
 static const uint MAX_LIGHTS = 8;
 
 struct GpuLight {
-    float4 PositionNdcAndRange;
+    float4 PositionWorldAndRange;
     float4 DirectionAndType;
     float4 ColorAndIntensity;
     float4 Params;
@@ -34,11 +34,6 @@ float3 ReconstructWorldPos(float2 uv, float depth) {
     return worldPos.xyz / max(worldPos.w, 1e-6f);
 }
 
-float3 NdcLightToWorld(float3 ndcPos) {
-    float4 worldPos = mul(float4(ndcPos, 1.0f), gInvViewProj);
-    return worldPos.xyz / max(worldPos.w, 1e-6f);
-}
-
 float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir) {
     float3 radiance = light.ColorAndIntensity.rgb * light.ColorAndIntensity.a;
     float3 L = 0.0f;
@@ -47,13 +42,13 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     if (lightType == LIGHT_TYPE_DIRECTIONAL) {
         L = normalize(-light.DirectionAndType.xyz);
     } else {
-        float3 lightPos = NdcLightToWorld(light.PositionNdcAndRange.xyz);
+        float3 lightPos = light.PositionWorldAndRange.xyz;
         float3 toLight = lightPos - worldPos;
         float dist = length(toLight);
         if (dist <= 1e-4f) return 0.0f;
 
         L = toLight / dist;
-        float range = max(light.PositionNdcAndRange.w, 1e-3f);
+        float range = max(light.PositionWorldAndRange.w, 1e-3f);
         float rangeFade = saturate(1.0f - dist / range);
         attenuation = rangeFade * rangeFade;
 

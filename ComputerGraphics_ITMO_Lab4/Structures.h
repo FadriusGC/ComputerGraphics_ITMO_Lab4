@@ -39,11 +39,11 @@ struct LightConstants {
 };
 
 struct GpuLight {
-  // xyz: position in NDC, w: range (for point/spot)
-  DirectX::SimpleMath::Vector4 PositionNdcAndRange;
-  // xyz: direction in world-space, w: type (0-point, 1-directional, 2-spot)
+  // xyz: мировая позиция, w: дальность для (point/spot)
+  DirectX::SimpleMath::Vector4 PositionWorldAndRange;
+  // xyz: направление в мире, w: тип (0-point, 1-directional, 2-spot)
   DirectX::SimpleMath::Vector4 DirectionAndType;
-  // rgb: light color, a: intensity
+  // rgb: цвет , a: интенсиность
   DirectX::SimpleMath::Vector4 ColorAndIntensity;
   // x: spotInnerCos, y: spotOuterCos
   DirectX::SimpleMath::Vector4 Params;

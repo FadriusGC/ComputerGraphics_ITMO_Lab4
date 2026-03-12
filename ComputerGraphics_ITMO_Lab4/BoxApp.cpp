@@ -782,47 +782,58 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.LightCount =
       DirectX::SimpleMath::Vector4(5.0f, 0.0f, 0.0f, 0.0f);
 
-  // Point lights (stored in NDC coordinates).
-  composeConstants.Lights[0].PositionNdcAndRange =
-      DirectX::SimpleMath::Vector4(-0.55f, 0.50f, 0.35f, 22.0f);
+  // Источники света
+  // Point #1: красный
+  composeConstants.Lights[0].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(-18.0f, 68.0f, -6.0f, 100.0f);
   composeConstants.Lights[0].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   composeConstants.Lights[0].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.2f, 0.2f, 2.2f);
+      DirectX::SimpleMath::Vector4(1.0f, 0.35f, 0.25f, 12.2f);
 
-  composeConstants.Lights[1].PositionNdcAndRange =
-      DirectX::SimpleMath::Vector4(0.60f, 0.35f, 0.50f, 18.0f);
+  // Point #2: синий
+  composeConstants.Lights[1].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(159.0f, 110.0f, 10.0f, 134.0f);
   composeConstants.Lights[1].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   composeConstants.Lights[1].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.2f, 0.5f, 1.0f, 2.0f);
+      DirectX::SimpleMath::Vector4(0.25f, 0.45f, 1.0f, 12.0f);
 
-  // Directional light.
-  composeConstants.Lights[2].PositionNdcAndRange =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.5f, 0.0f);
-  composeConstants.Lights[2].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
-  composeConstants.Lights[2].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.95f, 0.95f, 0.8f, 0.7f);
-
-  // Spot lights.
-  composeConstants.Lights[3].PositionNdcAndRange =
-      DirectX::SimpleMath::Vector4(-0.10f, 0.10f, 0.30f, 26.0f);
+  // Point #3: еще какой-то зеленый
+  composeConstants.Lights[3].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(-100.0f, 110.0f, 10.0f, 134.0f);
   composeConstants.Lights[3].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, -1.0f, 0.15f, 2.0f);
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   composeConstants.Lights[3].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.3f, 1.0f, 0.45f, 2.0f);
-  composeConstants.Lights[3].Params =
-      DirectX::SimpleMath::Vector4(0.95f, 0.80f, 0.0f, 0.0f);
+      DirectX::SimpleMath::Vector4(0.25f, 0.65f, 0.10f, 12.0f);
 
-  composeConstants.Lights[4].PositionNdcAndRange =
-      DirectX::SimpleMath::Vector4(0.15f, 0.75f, 0.25f, 24.0f);
+  // Directional: солнце типо
+  composeConstants.Lights[4].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   composeConstants.Lights[4].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.1f, -1.0f, -0.2f, 2.0f);
+      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
   composeConstants.Lights[4].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
+
+  // Spot #1: спот щеленый
+  composeConstants.Lights[5].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 15.0f, 36.0f, 45.0f);
+  composeConstants.Lights[5].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.15f, -1.0f, -0.25f, 2.0f);
+  composeConstants.Lights[5].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.25f, 1.0f, 0.45f, 5.0f);
+  composeConstants.Lights[5].Params =
+      DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
+
+  // Spot #2: розовый
+  composeConstants.Lights[6].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(12.0f, 11.0f, -14.0f, 42.0f);
+  composeConstants.Lights[6].DirectionAndType =
+      DirectX::SimpleMath::Vector4(-0.2f, -1.0f, 0.1f, 2.0f);
+  composeConstants.Lights[6].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.3f, 0.9f, 1.8f);
-  composeConstants.Lights[4].Params =
-      DirectX::SimpleMath::Vector4(0.94f, 0.78f, 0.0f, 0.0f);
+  composeConstants.Lights[6].Params =
+      DirectX::SimpleMath::Vector4(0.95f, 0.80f, 0.0f, 0.0f);
 
   mComposeCB->CopyData(0, composeConstants);
 
