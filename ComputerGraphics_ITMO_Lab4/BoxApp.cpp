@@ -3,6 +3,7 @@
 #include "DDSTextureLoader.h"
 #include "Material.h"
 #include "ModelLoader.h"
+#include "RenderingSystem.h"
 #include "ShaderHelper.h"
 
 BoxApp::BoxApp(HINSTANCE hInstance)
@@ -32,6 +33,9 @@ bool BoxApp::Initialize() {
   BuildDescriptorHeaps();
   CreateRTVs();
   CreateDepthStencil();
+
+  mRenderingSystem = std::make_unique<RenderingSystem>();
+  mRenderingSystem->Initialize(mDevice.Get(), WIDTH, HEIGHT, DepthStencilFormat);
 
   mScreenViewport.TopLeftX = 0;
   mScreenViewport.TopLeftY = 0;
@@ -69,6 +73,10 @@ void BoxApp::OnResize() {
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
       static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
+
+  if (mRenderingSystem) {
+    mRenderingSystem->Resize(mDevice.Get(), WIDTH, HEIGHT);
+  }
 }
 
 void BoxApp::BuildDescriptorHeaps() {
@@ -779,6 +787,11 @@ void BoxApp::Draw(const GameTimer& gt) {
 
   mCommandList->RSSetViewports(1, &mScreenViewport);
   mCommandList->RSSetScissorRects(1, &mScissorRect);
+
+  if (mRenderingSystem) {
+    mRenderingSystem->BeginGeometryPass(mCommandList.Get(), DepthStencilView());
+    mRenderingSystem->EndGeometryPass(mCommandList.Get());
+  }
 
   auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(
       mSwapChainBuffers[mCurrBackBuffer].Get(), D3D12_RESOURCE_STATE_PRESENT,
