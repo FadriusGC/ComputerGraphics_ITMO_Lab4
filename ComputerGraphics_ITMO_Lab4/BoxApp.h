@@ -18,6 +18,7 @@
 #include "D3DWindow.h"
 #include "DDSTextureLoader.h"
 #include "GameTimer.h"
+#include "RenderingSystem.h"
 #include "Structures.h"
 #include "UploadBuffer.h"
 #include "d3dx12.h"
@@ -113,7 +114,7 @@ class BoxApp {
 
   // Вектор всех загруженных текстур
   std::vector<std::unique_ptr<Texture>> mTextures;
-
+  static constexpr int kTextureSrvHeapStart = RenderingSystem::kTextureSrvStart;
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
 
@@ -131,6 +132,7 @@ class BoxApp {
   // Окно и таймер
   D3DWindow m_window;
   GameTimer mTimer;
+  RenderingSystem mRenderingSystem;
 
   // Матрицы
   DirectX::SimpleMath::Matrix mWorld;
@@ -138,12 +140,12 @@ class BoxApp {
   DirectX::SimpleMath::Matrix mProj;
 
   // фрикам
-  DirectX::SimpleMath::Vector3 mCamPos; 
-  float mCamYaw;                        
-  float mCamPitch;                    
-  float mMoveSpeed;                   
-  float mMouseSensitivity;             
-  POINT mLastMousePos;                  
+  DirectX::SimpleMath::Vector3 mCamPos;
+  float mCamYaw;
+  float mCamPitch;
+  float mMoveSpeed;
+  float mMouseSensitivity;
+  POINT mLastMousePos;
 
   // Геометрия модели
   ModelGeometry mModelGeometry;
