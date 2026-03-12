@@ -170,9 +170,9 @@ void BoxApp::BuildRootSignature() {
 void BoxApp::BuildShadersAndInputLayout() {
   try {
     mVSByteCode =
-        ShaderHelper::CompileShader(L"BoxVertexShader.hlsl", "VS", "vs_5_0");
+        ShaderHelper::CompileShader(L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/BoxVertexShader.hlsl", "VS", "vs_5_0");
     mPSByteCode =
-        ShaderHelper::CompileShader(L"BoxPixelShader.hlsl", "PS", "ps_5_0");
+        ShaderHelper::CompileShader(L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/BoxPixelShader.hlsl", "PS", "ps_5_0");
   } catch (const std::exception& e) {
     MessageBoxA(nullptr, e.what(), "Shader Error", MB_OK | MB_ICONERROR);
     throw;
@@ -189,7 +189,7 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath = "sponza.obj";
+  std::string modelPath = "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/sponza.obj";
 
   if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
     MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
@@ -467,7 +467,7 @@ void BoxApp::LoadAllTextures() {
   for (const auto& texName : uniqueTexturePaths) {
     // Формируем полный путь к текстуре
     std::wstring fullPath =
-        L"textures/" + std::wstring(texName.begin(), texName.end());
+        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/textures/" + std::wstring(texName.begin(), texName.end());
 
     auto texture = std::make_unique<Texture>();
     texture->name = texName;
