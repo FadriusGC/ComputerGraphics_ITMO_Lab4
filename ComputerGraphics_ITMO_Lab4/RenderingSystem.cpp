@@ -18,14 +18,14 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
 }
 
 void RenderingSystem::BuildShaders() {
-  mGeometryVS = ShaderHelper::CompileShader(
-      L"ComputerGraphics_ITMO_Lab4/DeferredGeometryVS.hlsl", "VS", "vs_5_0");
-  mGeometryPS = ShaderHelper::CompileShader(
-      L"ComputerGraphics_ITMO_Lab4/DeferredGeometryPS.hlsl", "PS", "ps_5_0");
-  mComposeVS = ShaderHelper::CompileShader(
-      L"ComputerGraphics_ITMO_Lab4/DeferredComposeVS.hlsl", "VS", "vs_5_0");
-  mComposePS = ShaderHelper::CompileShader(
-      L"ComputerGraphics_ITMO_Lab4/DeferredComposePS.hlsl", "PS", "ps_5_0");
+  mGeometryVS =
+      ShaderHelper::CompileShader(L"DeferredGeometryVS.hlsl", "VS", "vs_5_0");
+  mGeometryPS =
+      ShaderHelper::CompileShader(L"DeferredGeometryPS.hlsl", "PS", "ps_5_0");
+  mComposeVS =
+      ShaderHelper::CompileShader(L"DeferredComposeVS.hlsl", "VS", "vs_5_0");
+  mComposePS =
+      ShaderHelper::CompileShader(L"DeferredComposePS.hlsl", "PS", "ps_5_0");
 }
 
 void RenderingSystem::BuildInputLayout() {

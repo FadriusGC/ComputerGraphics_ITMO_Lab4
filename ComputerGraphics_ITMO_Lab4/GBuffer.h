@@ -17,7 +17,6 @@
 #include "D3DWindow.h"
 #include "DDSTextureLoader.h"
 #include "GameTimer.h"
-#include "RenderingSystem.h"
 #include "Structures.h"
 #include "UploadBuffer.h"
 #include "d3dx12.h"
