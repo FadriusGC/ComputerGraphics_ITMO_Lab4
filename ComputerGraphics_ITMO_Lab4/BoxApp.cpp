@@ -108,6 +108,8 @@ void BoxApp::BuildConstantBuffers() {
       new UploadBuffer<ObjectConstants>(mDevice.Get(), 1, true));
   mLightCB = std::unique_ptr<UploadBuffer<LightConstants>>(
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
+  mComposeCB = std::unique_ptr<UploadBuffer<ComposeConstants>>(
+      new UploadBuffer<ComposeConstants>(mDevice.Get(), 1, true));
 
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
   cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
@@ -663,7 +665,7 @@ void BoxApp::CreateDepthStencil() {
   depthStencilDesc.Height = HEIGHT;
   depthStencilDesc.DepthOrArraySize = 1;
   depthStencilDesc.MipLevels = 1;
-  depthStencilDesc.Format = DepthStencilFormat;
+  depthStencilDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
   depthStencilDesc.SampleDesc.Count = 1;
   depthStencilDesc.SampleDesc.Quality = 0;
   depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -681,9 +683,25 @@ void BoxApp::CreateDepthStencil() {
       D3D12_RESOURCE_STATE_COMMON, &optClear,
       IID_PPV_ARGS(&mDepthStencilBuffer)));
 
+  D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+  dsvDesc.Format = DepthStencilFormat;
+  dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+  dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
   mDevice->CreateDepthStencilView(
-      mDepthStencilBuffer.Get(), nullptr,
+      mDepthStencilBuffer.Get(), &dsvDesc,
       mDsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC depthSrvDesc = {};
+  depthSrvDesc.Shader4ComponentMapping =
+      D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  depthSrvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+  depthSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  depthSrvDesc.Texture2D.MipLevels = 1;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE depthSrvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(RenderingSystem::kDepthSrvIndex), mCbvSrvDescriptorSize);
+  mDevice->CreateShaderResourceView(mDepthStencilBuffer.Get(), &depthSrvDesc,
+                                    depthSrvHandle);
 
   auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -753,6 +771,61 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
   mLightCB->CopyData(0, lightConstants);
 
+  ComposeConstants composeConstants = {};
+  DirectX::SimpleMath::Matrix viewProj = mView * mProj;
+  composeConstants.InvViewProj = viewProj.Invert().Transpose();
+  composeConstants.CameraPosition =
+      DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
+  composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
+      static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
+      1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
+  composeConstants.LightCount =
+      DirectX::SimpleMath::Vector4(5.0f, 0.0f, 0.0f, 0.0f);
+
+  // Point lights (stored in NDC coordinates).
+  composeConstants.Lights[0].PositionNdcAndRange =
+      DirectX::SimpleMath::Vector4(-0.55f, 0.50f, 0.35f, 22.0f);
+  composeConstants.Lights[0].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[0].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.2f, 0.2f, 2.2f);
+
+  composeConstants.Lights[1].PositionNdcAndRange =
+      DirectX::SimpleMath::Vector4(0.60f, 0.35f, 0.50f, 18.0f);
+  composeConstants.Lights[1].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[1].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.2f, 0.5f, 1.0f, 2.0f);
+
+  // Directional light.
+  composeConstants.Lights[2].PositionNdcAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.5f, 0.0f);
+  composeConstants.Lights[2].DirectionAndType =
+      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
+  composeConstants.Lights[2].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.95f, 0.95f, 0.8f, 0.7f);
+
+  // Spot lights.
+  composeConstants.Lights[3].PositionNdcAndRange =
+      DirectX::SimpleMath::Vector4(-0.10f, 0.10f, 0.30f, 26.0f);
+  composeConstants.Lights[3].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, -1.0f, 0.15f, 2.0f);
+  composeConstants.Lights[3].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.3f, 1.0f, 0.45f, 2.0f);
+  composeConstants.Lights[3].Params =
+      DirectX::SimpleMath::Vector4(0.95f, 0.80f, 0.0f, 0.0f);
+
+  composeConstants.Lights[4].PositionNdcAndRange =
+      DirectX::SimpleMath::Vector4(0.15f, 0.75f, 0.25f, 24.0f);
+  composeConstants.Lights[4].DirectionAndType =
+      DirectX::SimpleMath::Vector4(-0.1f, -1.0f, -0.2f, 2.0f);
+  composeConstants.Lights[4].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.3f, 0.9f, 1.8f);
+  composeConstants.Lights[4].Params =
+      DirectX::SimpleMath::Vector4(0.94f, 0.78f, 0.0f, 0.0f);
+
+  mComposeCB->CopyData(0, composeConstants);
+
   static float time = 0.0f;
   time += gt.DeltaTime();
 
@@ -787,12 +860,13 @@ void BoxApp::Update(const GameTimer& gt) {
 void BoxApp::Draw(const GameTimer& gt) {
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
-  mRenderingSystem.Render(mCommandList.Get(), CurrentBackBufferView(),
-                          mSwapChainBuffers[mCurrBackBuffer].Get(),
-                          DepthStencilView(), mCbvHeap.Get(),
-                          mSamplerHeap.Get(), mCbvSrvDescriptorSize,
-                          mScreenViewport, mScissorRect, mVertexBufferView,
-                          mIndexBufferView, mModelGeometry, mMaterialCB.get());
+  mRenderingSystem.Render(
+      mCommandList.Get(), CurrentBackBufferView(),
+      mSwapChainBuffers[mCurrBackBuffer].Get(), DepthStencilView(),
+      mCbvHeap.Get(), mSamplerHeap.Get(), mCbvSrvDescriptorSize,
+      mScreenViewport, mScissorRect, mVertexBufferView, mIndexBufferView,
+      mModelGeometry, mMaterialCB.get(), mDepthStencilBuffer.Get(),
+      mComposeCB->Resource()->GetGPUVirtualAddress());
 
   ThrowIfFailed(mCommandList->Close());
 

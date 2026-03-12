@@ -110,6 +110,7 @@ class BoxApp {
   // Константные буферы
   std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
+  std::unique_ptr<UploadBuffer<ComposeConstants>> mComposeCB;
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
   // Вектор всех загруженных текстур

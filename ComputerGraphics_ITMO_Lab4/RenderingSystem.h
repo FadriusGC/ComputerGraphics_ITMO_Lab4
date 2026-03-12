@@ -11,7 +11,8 @@ class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
   static constexpr UINT kGBufferSrvStart = 2;
-  static constexpr UINT kTextureSrvStart = 4;
+  static constexpr UINT kTextureSrvStart = 5;
+  static constexpr UINT kDepthSrvIndex = 4;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
@@ -27,7 +28,9 @@ class RenderingSystem {
               const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
               const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
               const ModelGeometry& modelGeometry,
-              UploadBuffer<MaterialConstants>* materialCB);
+              UploadBuffer<MaterialConstants>* materialCB,
+              ID3D12Resource* depthBuffer,
+              D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress);
 
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);

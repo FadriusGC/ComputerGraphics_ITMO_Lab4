@@ -78,18 +78,20 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[2];
+  CD3DX12_ROOT_PARAMETER params[3];
 
   CD3DX12_DESCRIPTOR_RANGE gbufferSrvTable;
-  gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0);
+  gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
   params[0].InitAsDescriptorTable(1, &gbufferSrvTable);
 
   CD3DX12_DESCRIPTOR_RANGE samplerTable;
   samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
   params[1].InitAsDescriptorTable(1, &samplerTable);
 
+  params[2].InitAsConstantBufferView(0);
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      2, params, 0, nullptr,
+      3, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -167,7 +169,8 @@ void RenderingSystem::Render(
     const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
     const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     const ModelGeometry& modelGeometry,
-    UploadBuffer<MaterialConstants>* materialCB) {
+    UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
+    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress) {
   cmdList->RSSetViewports(1, &viewport);
   cmdList->RSSetScissorRects(1, &scissorRect);
 
@@ -214,6 +217,11 @@ void RenderingSystem::Render(
 
   mGBuffer.EndGeometryPass(cmdList);
 
+  auto depthToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+      depthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  cmdList->ResourceBarrier(1, &depthToSrv);
+
   auto toBackBuffer = CD3DX12_RESOURCE_BARRIER::Transition(
       backBuffer, D3D12_RESOURCE_STATE_PRESENT,
       D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -228,8 +236,14 @@ void RenderingSystem::Render(
   cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSrvStartGpuHandle());
   cmdList->SetGraphicsRootDescriptorTable(
       1, samplerHeap->GetGPUDescriptorHandleForHeapStart());
+  cmdList->SetGraphicsRootConstantBufferView(2, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
+
+  auto depthToWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+      depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+      D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  cmdList->ResourceBarrier(1, &depthToWrite);
 
   auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
       backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
