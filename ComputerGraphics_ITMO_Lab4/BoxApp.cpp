@@ -194,7 +194,9 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath = "sponza.obj";
+  std::string modelPath =
+      "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      "ComputerGraphics_ITMO_Lab4/sponza.obj";
 
   if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
     MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
@@ -472,7 +474,9 @@ void BoxApp::LoadAllTextures() {
   for (const auto& texName : uniqueTexturePaths) {
     // Формируем полный путь к текстуре
     std::wstring fullPath =
-        L"textures/" + std::wstring(texName.begin(), texName.end());
+        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+        L"ComputerGraphics_ITMO_Lab4/textures/" +
+        std::wstring(texName.begin(), texName.end());
 
     auto texture = std::make_unique<Texture>();
     texture->name = texName;
