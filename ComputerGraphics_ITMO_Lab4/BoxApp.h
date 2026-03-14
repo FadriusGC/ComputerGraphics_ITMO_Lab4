@@ -168,6 +168,7 @@ class BoxApp {
   D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
   UINT mIndexCount = 0;
 
-  std::array<FallingPointLight, 3> mFallingLights;
+  static constexpr size_t kFallingLightCount = 8;
+  std::array<FallingPointLight, kFallingLightCount> mFallingLights;
   std::mt19937 mRandomEngine;
 };
