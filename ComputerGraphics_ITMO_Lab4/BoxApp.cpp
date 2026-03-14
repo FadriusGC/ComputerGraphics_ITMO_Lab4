@@ -1,4 +1,5 @@
-﻿#include "BoxApp.h"
+﻿#define NOMINMAX
+#include "BoxApp.h"
 
 #include "DDSTextureLoader.h"
 #include "Material.h"
@@ -12,10 +13,31 @@ BoxApp::BoxApp(HINSTANCE hInstance)
       mCamYaw(0.0f),
       mCamPitch(0.0f),
       mMoveSpeed(25.0f),
-      mMouseSensitivity(0.002f) {
+      mMouseSensitivity(0.002f),
+      mRandomEngine(std::random_device{}()) {
   mWorld = DirectX::SimpleMath::Matrix::Identity;
   mView = DirectX::SimpleMath::Matrix::Identity;
   mProj = DirectX::SimpleMath::Matrix::Identity;
+
+  mFallingLights[0].Color = DirectX::SimpleMath::Vector3(1.0f, 0.35f, 0.25f);
+  mFallingLights[0].Intensity = 13.0f;
+  mFallingLights[0].Range = 100.0f;
+  mFallingLights[0].FallSpeed = 45.0f;
+
+  mFallingLights[1].Color = DirectX::SimpleMath::Vector3(0.25f, 0.45f, 1.0f);
+  mFallingLights[1].Intensity = 12.0f;
+  mFallingLights[1].Range = 120.0f;
+  mFallingLights[1].FallSpeed = 42.0f;
+
+  mFallingLights[2].Color = DirectX::SimpleMath::Vector3(0.25f, 0.65f, 0.10f);
+  mFallingLights[2].Intensity = 11.0f;
+  mFallingLights[2].Range = 110.0f;
+  mFallingLights[2].FallSpeed = 40.0f;
+
+  for (auto& light : mFallingLights) {
+    ResetFallingLight(light);
+    light.CooldownAfterLanding = 0.0f;
+  }
 }
 
 BoxApp::~BoxApp() { FlushCommandQueue(); }
@@ -69,6 +91,17 @@ void BoxApp::OnResize() {
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
       static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
+}
+
+void BoxApp::ResetFallingLight(FallingPointLight& light) {
+  std::uniform_real_distribution<float> xzDistribution(-140.0f, 140.0f);
+  std::uniform_real_distribution<float> heightDistribution(95.0f, 145.0f);
+  std::uniform_real_distribution<float> cooldownDistribution(0.7f, 2.1f);
+
+  light.Position.x = xzDistribution(mRandomEngine);
+  light.Position.z = xzDistribution(mRandomEngine);
+  light.Position.y = heightDistribution(mRandomEngine);
+  light.CooldownAfterLanding = cooldownDistribution(mRandomEngine);
 }
 
 void BoxApp::BuildDescriptorHeaps() {
@@ -782,30 +815,30 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.LightCount =
       DirectX::SimpleMath::Vector4(6.0f, 0.0f, 0.0f, 0.0f);
 
-  // Источники света
-  // Point #1 : красный
-  composeConstants.Lights[0].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(-18.0f, 68.0f, -6.0f, 100.0f);
-  composeConstants.Lights[0].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[0].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.35f, 0.25f, 12.2f);
-
-  // Point #2: синий
-  composeConstants.Lights[1].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(159.0f, 110.0f, 10.0f, 134.0f);
-  composeConstants.Lights[1].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[1].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.25f, 0.45f, 1.0f, 12.0f);
-
-  // Point #3: еще какой-то зеленый
-  composeConstants.Lights[2].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(-100.0f, 110.0f, 10.0f, 134.0f);
-  composeConstants.Lights[2].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[2].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.25f, 0.65f, 0.10f, 12.0f);
+  // Падающие point lights с приземлением на пол. занимают lights[0-3]
+  const float deltaTime = gt.DeltaTime();
+  for (size_t i = 0; i < mFallingLights.size(); ++i) {
+    auto& fallingLight = mFallingLights[i];
+    if (fallingLight.Position.y > fallingLight.GroundY) {
+      fallingLight.Position.y = std::max(
+          fallingLight.GroundY,
+          fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
+    } else {
+      fallingLight.CooldownAfterLanding -= deltaTime;
+      if (fallingLight.CooldownAfterLanding <= 0.0f) {
+        ResetFallingLight(fallingLight);
+      }
+    }
+    composeConstants.Lights[i].PositionWorldAndRange =
+        DirectX::SimpleMath::Vector4(
+            fallingLight.Position.x, fallingLight.Position.y,
+            fallingLight.Position.z, fallingLight.Range);
+    composeConstants.Lights[i].DirectionAndType =
+        DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+    composeConstants.Lights[i].ColorAndIntensity = DirectX::SimpleMath::Vector4(
+        fallingLight.Color.x, fallingLight.Color.y, fallingLight.Color.z,
+        fallingLight.Intensity);
+  }
 
   // Directional: солнце типо
   composeConstants.Lights[3].PositionWorldAndRange =

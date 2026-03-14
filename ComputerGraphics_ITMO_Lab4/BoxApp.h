@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,16 @@ struct Texture {
   std::wstring filepath;
   ComPtr<ID3D12Resource> Resource = nullptr;
   ComPtr<ID3D12Resource> UploadHeap = nullptr;
+};
+
+struct FallingPointLight {
+  DirectX::SimpleMath::Vector3 Position;
+  DirectX::SimpleMath::Vector3 Color;
+  float Intensity = 1.0f;
+  float Range = 1.0f;
+  float FallSpeed = 1.0f;
+  float GroundY = 0.0f;
+  float CooldownAfterLanding = 0.0f;
 };
 
 class BoxApp {
@@ -75,6 +86,7 @@ class BoxApp {
   void CreateDepthStencil();
   void FlushCommandQueue();
   void CalculateFrameStats();
+  void ResetFallingLight(FallingPointLight& light);
 
   D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
   D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
@@ -155,4 +167,7 @@ class BoxApp {
   D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
   D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
   UINT mIndexCount = 0;
+
+  std::array<FallingPointLight, 3> mFallingLights;
+  std::mt19937 mRandomEngine;
 };
