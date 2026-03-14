@@ -133,7 +133,9 @@
     <ClCompile Include="D3DWindow.cpp" />
     <ClCompile Include="DDSTextureLoader.cpp" />
     <ClCompile Include="GameTimer.cpp" />
+    <ClCompile Include="GBuffer.cpp" />
     <ClCompile Include="ModelLoader.cpp" />
+    <ClCompile Include="RenderingSystem.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -144,8 +146,10 @@
     <ClInclude Include="D3DWindow.h" />
     <ClInclude Include="DDSTextureLoader.h" />
     <ClInclude Include="GameTimer.h" />
+    <ClInclude Include="GBuffer.h" />
     <ClInclude Include="Material.h" />
     <ClInclude Include="ModelLoader.h" />
+    <ClInclude Include="RenderingSystem.h" />
     <ClInclude Include="ShaderHelper.h" />
     <ClInclude Include="Structures.h" />
     <ClInclude Include="UploadBuffer.h" />

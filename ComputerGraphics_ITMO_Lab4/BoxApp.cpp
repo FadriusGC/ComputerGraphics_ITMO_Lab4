@@ -45,14 +45,14 @@ bool BoxApp::Initialize() {
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
 
-  BuildRootSignature();
-  BuildShadersAndInputLayout();
   BuildConstantBuffers();
-  BuildPSO();
   BuildBoxGeometry();  // загружает модель, создаёт буферы и текстуры
 
   // Создаём сэмплер
   CreateSamplerHeap();
+  mRenderingSystem.Initialize(mDevice.Get(), WIDTH, HEIGHT, mRtvHeap.Get(),
+                              mCbvHeap.Get(), mRtvDescriptorSize,
+                              mCbvSrvDescriptorSize);
   // Закрываем и выполняем все накопленные команды (геометрия + текстуры)
   ThrowIfFailed(mCommandList->Close());
 
@@ -73,7 +73,8 @@ void BoxApp::OnResize() {
 
 void BoxApp::BuildDescriptorHeaps() {
   D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-  rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
+  rtvHeapDesc.NumDescriptors =
+      SwapChainBufferCount + GBuffer::kRenderTargetCount;
   rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
   rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
   ThrowIfFailed(
@@ -107,6 +108,8 @@ void BoxApp::BuildConstantBuffers() {
       new UploadBuffer<ObjectConstants>(mDevice.Get(), 1, true));
   mLightCB = std::unique_ptr<UploadBuffer<LightConstants>>(
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
+  mComposeCB = std::unique_ptr<UploadBuffer<ComposeConstants>>(
+      new UploadBuffer<ComposeConstants>(mDevice.Get(), 1, true));
 
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
   cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
@@ -169,10 +172,14 @@ void BoxApp::BuildRootSignature() {
 
 void BoxApp::BuildShadersAndInputLayout() {
   try {
-    mVSByteCode =
-        ShaderHelper::CompileShader(L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/BoxVertexShader.hlsl", "VS", "vs_5_0");
-    mPSByteCode =
-        ShaderHelper::CompileShader(L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/BoxPixelShader.hlsl", "PS", "ps_5_0");
+    mVSByteCode = ShaderHelper::CompileShader(
+        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+        L"ComputerGraphics_ITMO_Lab4/BoxVertexShader.hlsl",
+        "VS", "vs_5_0");
+    mPSByteCode = ShaderHelper::CompileShader(
+        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+        L"ComputerGraphics_ITMO_Lab4/BoxPixelShader.hlsl",
+        "PS", "ps_5_0");
   } catch (const std::exception& e) {
     MessageBoxA(nullptr, e.what(), "Shader Error", MB_OK | MB_ICONERROR);
     throw;
@@ -189,7 +196,9 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath = "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/sponza.obj";
+  std::string modelPath =
+      "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      "ComputerGraphics_ITMO_Lab4/sponza.obj";
 
   if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
     MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
@@ -467,7 +476,9 @@ void BoxApp::LoadAllTextures() {
   for (const auto& texName : uniqueTexturePaths) {
     // Формируем полный путь к текстуре
     std::wstring fullPath =
-        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/ComputerGraphics_ITMO_Lab4/textures/" + std::wstring(texName.begin(), texName.end());
+        L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+        L"ComputerGraphics_ITMO_Lab4/textures/" +
+        std::wstring(texName.begin(), texName.end());
 
     auto texture = std::make_unique<Texture>();
     texture->name = texName;
@@ -481,8 +492,10 @@ void BoxApp::LoadAllTextures() {
     int textureIndex = (int)mTextures.size();
     mTextures.push_back(std::move(texture));
 
-    // Создаём SRV для этой текстуры в куче по индексу (2 + textureIndex)
-    CreateSRV(mTextures[textureIndex]->Resource, 2 + textureIndex);
+    // Создаём SRV для этой текстуры в куче по индексу
+    // (kTextureSrvHeapStart + textureIndex)
+    CreateSRV(mTextures[textureIndex]->Resource,
+              kTextureSrvHeapStart + textureIndex);
   }
 
   // После загрузки всех текстур связываем материалы с индексами текстур
@@ -652,7 +665,7 @@ void BoxApp::CreateDepthStencil() {
   depthStencilDesc.Height = HEIGHT;
   depthStencilDesc.DepthOrArraySize = 1;
   depthStencilDesc.MipLevels = 1;
-  depthStencilDesc.Format = DepthStencilFormat;
+  depthStencilDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
   depthStencilDesc.SampleDesc.Count = 1;
   depthStencilDesc.SampleDesc.Quality = 0;
   depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -670,9 +683,25 @@ void BoxApp::CreateDepthStencil() {
       D3D12_RESOURCE_STATE_COMMON, &optClear,
       IID_PPV_ARGS(&mDepthStencilBuffer)));
 
+  D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+  dsvDesc.Format = DepthStencilFormat;
+  dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+  dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
   mDevice->CreateDepthStencilView(
-      mDepthStencilBuffer.Get(), nullptr,
+      mDepthStencilBuffer.Get(), &dsvDesc,
       mDsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC depthSrvDesc = {};
+  depthSrvDesc.Shader4ComponentMapping =
+      D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  depthSrvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+  depthSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  depthSrvDesc.Texture2D.MipLevels = 1;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE depthSrvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(RenderingSystem::kDepthSrvIndex), mCbvSrvDescriptorSize);
+  mDevice->CreateShaderResourceView(mDepthStencilBuffer.Get(), &depthSrvDesc,
+                                    depthSrvHandle);
 
   auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -742,6 +771,72 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
   mLightCB->CopyData(0, lightConstants);
 
+  ComposeConstants composeConstants = {};
+  DirectX::SimpleMath::Matrix viewProj = mView * mProj;
+  composeConstants.InvViewProj = viewProj.Invert().Transpose();
+  composeConstants.CameraPosition =
+      DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
+  composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
+      static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
+      1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
+  composeConstants.LightCount =
+      DirectX::SimpleMath::Vector4(6.0f, 0.0f, 0.0f, 0.0f);
+
+  // Источники света
+  // Point #1 : красный
+  composeConstants.Lights[0].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(-18.0f, 68.0f, -6.0f, 100.0f);
+  composeConstants.Lights[0].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[0].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.35f, 0.25f, 12.2f);
+
+  // Point #2: синий
+  composeConstants.Lights[1].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(159.0f, 110.0f, 10.0f, 134.0f);
+  composeConstants.Lights[1].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[1].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.25f, 0.45f, 1.0f, 12.0f);
+
+  // Point #3: еще какой-то зеленый
+  composeConstants.Lights[2].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(-100.0f, 110.0f, 10.0f, 134.0f);
+  composeConstants.Lights[2].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[2].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(0.25f, 0.65f, 0.10f, 12.0f);
+
+  // Directional: солнце типо
+  composeConstants.Lights[3].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  composeConstants.Lights[3].DirectionAndType =
+      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
+  composeConstants.Lights[3].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
+
+  // Spot #1: спот щеленый
+  composeConstants.Lights[4].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 14445.0f);
+  composeConstants.Lights[4].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.5f, -1.0f, 2.0f);
+  composeConstants.Lights[4].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.0f, 5.0f);
+  composeConstants.Lights[4].Params =
+      DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
+
+  // Spot #2: красный
+  composeConstants.Lights[5].PositionWorldAndRange =
+      DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 155500.0f);
+  composeConstants.Lights[5].DirectionAndType =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 1.0f, 2.0f);
+  composeConstants.Lights[5].ColorAndIntensity =
+      DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 111.8f);
+  composeConstants.Lights[5].Params =
+      DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
+
+  mComposeCB->CopyData(0, composeConstants);
+
   static float time = 0.0f;
   time += gt.DeltaTime();
 
@@ -775,81 +870,14 @@ void BoxApp::Update(const GameTimer& gt) {
 
 void BoxApp::Draw(const GameTimer& gt) {
   ThrowIfFailed(mCommandAllocator->Reset());
-  ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), mPSO.Get()));
-
-  mCommandList->RSSetViewports(1, &mScreenViewport);
-  mCommandList->RSSetScissorRects(1, &mScissorRect);
-
-  auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(
-      mSwapChainBuffers[mCurrBackBuffer].Get(), D3D12_RESOURCE_STATE_PRESENT,
-      D3D12_RESOURCE_STATE_RENDER_TARGET);
-  mCommandList->ResourceBarrier(1, &barrier1);
-
-  D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = CurrentBackBufferView();
-  D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = DepthStencilView();
-
-  const float clearColor[] = {0.0f, 0.2f, 0.4f, 1.0f};
-  mCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-  mCommandList->ClearDepthStencilView(
-      dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0,
-      nullptr);
-
-  mCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-  ID3D12DescriptorHeap* descriptorHeaps[] = {mCbvHeap.Get(),
-                                             mSamplerHeap.Get()};
-  mCommandList->SetDescriptorHeaps(2, descriptorHeaps);
-
-  mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
-
-  // Постоянные таблицы: object CBV (слот 0) и light CBV (слот 1)
-  mCommandList->SetGraphicsRootDescriptorTable(
-      0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
-
-  CD3DX12_GPU_DESCRIPTOR_HANDLE lightCbvHandle(
-      mCbvHeap->GetGPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
-  mCommandList->SetGraphicsRootDescriptorTable(1, lightCbvHandle);
-
-  // Сэмплер (слот 3) – постоянный для всех вызовов отрисовки
-  mCommandList->SetGraphicsRootDescriptorTable(
-      3, mSamplerHeap->GetGPUDescriptorHandleForHeapStart());
-
-  mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
-  mCommandList->IASetIndexBuffer(&mIndexBufferView);
-  mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-  UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
-
-  // Проходим по всем сабмешам
-  for (const auto& submesh : mModelGeometry.Submeshes) {
-    if (submesh.MaterialIndex < mModelGeometry.Materials.size()) {
-      const auto& mat = mModelGeometry.Materials[submesh.MaterialIndex];
-
-      // Устанавливаем константный буфер материала (слот 4)
-      int cbIndex = mat.MatCBIndex;
-      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
-          mMaterialCB->Resource()->GetGPUVirtualAddress() +
-          cbIndex * cbMaterialSize;
-      mCommandList->SetGraphicsRootConstantBufferView(4, matCBAddress);
-
-      // Устанавливаем дескриптор текстуры (слот 2)
-      if (mat.DiffuseTextureIndex >= 0) {
-        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(
-            mCbvHeap->GetGPUDescriptorHandleForHeapStart(),
-            2 + mat.DiffuseTextureIndex, mCbvSrvDescriptorSize);
-        mCommandList->SetGraphicsRootDescriptorTable(2, texHandle);
-      } else {
-      }
-    }
-
-    mCommandList->DrawIndexedInstanced(submesh.IndexCount, 1,
-                                       submesh.StartIndexLocation, 0, 0);
-  }
-
-  auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(
-      mSwapChainBuffers[mCurrBackBuffer].Get(),
-      D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-  mCommandList->ResourceBarrier(1, &barrier2);
+  ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
+  mRenderingSystem.Render(
+      mCommandList.Get(), CurrentBackBufferView(),
+      mSwapChainBuffers[mCurrBackBuffer].Get(), DepthStencilView(),
+      mCbvHeap.Get(), mSamplerHeap.Get(), mCbvSrvDescriptorSize,
+      mScreenViewport, mScissorRect, mVertexBufferView, mIndexBufferView,
+      mModelGeometry, mMaterialCB.get(), mDepthStencilBuffer.Get(),
+      mComposeCB->Resource()->GetGPUVirtualAddress());
 
   ThrowIfFailed(mCommandList->Close());
 

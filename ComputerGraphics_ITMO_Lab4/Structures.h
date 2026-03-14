@@ -37,3 +37,24 @@ struct LightConstants {
   DirectX::SimpleMath::Vector4 LightColor;
   DirectX::SimpleMath::Vector4 CameraPosition;
 };
+
+struct GpuLight {
+  // xyz: мировая позиция, w: дальность для (point/spot)
+  DirectX::SimpleMath::Vector4 PositionWorldAndRange;
+  // xyz: направление в мире, w: тип (0-point, 1-directional, 2-spot)
+  DirectX::SimpleMath::Vector4 DirectionAndType;
+  // rgb: цвет , a: интенсиность
+  DirectX::SimpleMath::Vector4 ColorAndIntensity;
+  // x: spotInnerCos, y: spotOuterCos
+  DirectX::SimpleMath::Vector4 Params;
+};
+
+struct ComposeConstants {
+  static constexpr int kMaxLights = 8;
+
+  DirectX::SimpleMath::Matrix InvViewProj;
+  DirectX::SimpleMath::Vector4 CameraPosition;
+  DirectX::SimpleMath::Vector4 ScreenSize;
+  DirectX::SimpleMath::Vector4 LightCount;
+  GpuLight Lights[kMaxLights];
+};
