@@ -827,6 +827,9 @@ void BoxApp::Update(const GameTimer& gt) {
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
   constexpr size_t kStaticLightCount = 3;
+  static_assert(
+      kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
+      "слишком много источников для ComposeConstants::Lights array");
   composeConstants.LightCount = DirectX::SimpleMath::Vector4(
       static_cast<float>(mFallingLights.size() + kStaticLightCount), 0.0f, 0.0f,
       0.0f);
