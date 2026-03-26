@@ -50,7 +50,7 @@ struct GpuLight {
 };
 
 struct ComposeConstants {
-  static constexpr int kMaxLights = 8;
+  static constexpr int kMaxLights = 100;
 
   DirectX::SimpleMath::Matrix InvViewProj;
   DirectX::SimpleMath::Vector4 CameraPosition;

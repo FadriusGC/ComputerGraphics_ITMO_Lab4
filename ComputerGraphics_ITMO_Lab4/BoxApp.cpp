@@ -1,4 +1,5 @@
-﻿#include "BoxApp.h"
+﻿#define NOMINMAX
+#include "BoxApp.h"
 
 #include "DDSTextureLoader.h"
 #include "Material.h"
@@ -12,10 +13,45 @@ BoxApp::BoxApp(HINSTANCE hInstance)
       mCamYaw(0.0f),
       mCamPitch(0.0f),
       mMoveSpeed(25.0f),
-      mMouseSensitivity(0.002f) {
+      mMouseSensitivity(0.002f),
+      mRandomEngine(std::random_device{}()) {
   mWorld = DirectX::SimpleMath::Matrix::Identity;
   mView = DirectX::SimpleMath::Matrix::Identity;
   mProj = DirectX::SimpleMath::Matrix::Identity;
+
+  mFallingLights[0].Color = DirectX::SimpleMath::Vector3(1.0f, 0.35f, 0.25f);
+  mFallingLights[0].Intensity = 13.0f;
+  mFallingLights[0].Range = 100.0f;
+  mFallingLights[0].FallSpeed = 45.0f;
+
+  mFallingLights[1].Color = DirectX::SimpleMath::Vector3(0.25f, 0.45f, 1.0f);
+  mFallingLights[1].Intensity = 12.0f;
+  mFallingLights[1].Range = 120.0f;
+  mFallingLights[1].FallSpeed = 42.0f;
+
+  mFallingLights[2].Color = DirectX::SimpleMath::Vector3(0.25f, 0.65f, 0.10f);
+  mFallingLights[2].Intensity = 11.0f;
+  mFallingLights[2].Range = 110.0f;
+  mFallingLights[2].FallSpeed = 40.0f;
+
+  const std::array<DirectX::SimpleMath::Vector3, 5> extraLightPalette = {
+      DirectX::SimpleMath::Vector3(1.0f, 0.80f, 0.30f),
+      DirectX::SimpleMath::Vector3(0.80f, 0.20f, 1.0f),
+      DirectX::SimpleMath::Vector3(0.20f, 1.0f, 0.80f),
+      DirectX::SimpleMath::Vector3(1.0f, 0.40f, 0.70f),
+      DirectX::SimpleMath::Vector3(0.40f, 0.90f, 1.0f)};
+
+  for (size_t i = 3; i < mFallingLights.size(); ++i) {
+    auto& light = mFallingLights[i];
+    light.Color = extraLightPalette[(i - 3) % extraLightPalette.size()];
+    light.Intensity = 9.0f + static_cast<float>((i - 3) % 4);
+    light.Range = 95.0f + 7.0f * static_cast<float>((i - 3) % 5);
+    light.FallSpeed = 32.0f + 3.5f * static_cast<float>((i - 3) % 4);
+  }
+  for (auto& light : mFallingLights) {
+    ResetFallingLight(light);
+    light.CooldownAfterLanding = 0.0f;
+  }
 }
 
 BoxApp::~BoxApp() { FlushCommandQueue(); }
@@ -69,6 +105,17 @@ void BoxApp::OnResize() {
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
       static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
+}
+
+void BoxApp::ResetFallingLight(FallingPointLight& light) {
+  std::uniform_real_distribution<float> xzDistribution(-140.0f, 140.0f);
+  std::uniform_real_distribution<float> heightDistribution(95.0f, 145.0f);
+  std::uniform_real_distribution<float> cooldownDistribution(0.7f, 2.1f);
+
+  light.Position.x = xzDistribution(mRandomEngine);
+  light.Position.z = xzDistribution(mRandomEngine);
+  light.Position.y = heightDistribution(mRandomEngine);
+  light.CooldownAfterLanding = cooldownDistribution(mRandomEngine);
 }
 
 void BoxApp::BuildDescriptorHeaps() {
@@ -779,60 +826,68 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
-  composeConstants.LightCount =
-      DirectX::SimpleMath::Vector4(6.0f, 0.0f, 0.0f, 0.0f);
+  constexpr size_t kStaticLightCount = 3;
+  static_assert(
+      kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
+      "слишком много источников для ComposeConstants::Lights array");
+  composeConstants.LightCount = DirectX::SimpleMath::Vector4(
+      static_cast<float>(mFallingLights.size() + kStaticLightCount), 0.0f, 0.0f,
+      0.0f);
 
-  // Источники света
-  // Point #1 : красный
-  composeConstants.Lights[0].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(-18.0f, 68.0f, -6.0f, 100.0f);
-  composeConstants.Lights[0].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[0].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.35f, 0.25f, 12.2f);
+  // Падающие point lights с приземлением на пол. занимают lights[0-3]
+  const float deltaTime = gt.DeltaTime();
+  for (size_t i = 0; i < mFallingLights.size(); ++i) {
+    auto& fallingLight = mFallingLights[i];
+    if (fallingLight.Position.y > fallingLight.GroundY) {
+      fallingLight.Position.y = std::max(
+          fallingLight.GroundY,
+          fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
+    } else {
+      fallingLight.CooldownAfterLanding -= deltaTime;
+      if (fallingLight.CooldownAfterLanding <= 0.0f) {
+        ResetFallingLight(fallingLight);
+      }
+    }
+    composeConstants.Lights[i].PositionWorldAndRange =
+        DirectX::SimpleMath::Vector4(
+            fallingLight.Position.x, fallingLight.Position.y,
+            fallingLight.Position.z, fallingLight.Range);
+    composeConstants.Lights[i].DirectionAndType =
+        DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+    composeConstants.Lights[i].ColorAndIntensity = DirectX::SimpleMath::Vector4(
+        fallingLight.Color.x, fallingLight.Color.y, fallingLight.Color.z,
+        fallingLight.Intensity);
+  }
 
-  // Point #2: синий
-  composeConstants.Lights[1].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(159.0f, 110.0f, 10.0f, 134.0f);
-  composeConstants.Lights[1].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[1].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.25f, 0.45f, 1.0f, 12.0f);
-
-  // Point #3: еще какой-то зеленый
-  composeConstants.Lights[2].PositionWorldAndRange =
-      DirectX::SimpleMath::Vector4(-100.0f, 110.0f, 10.0f, 134.0f);
-  composeConstants.Lights[2].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[2].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(0.25f, 0.65f, 0.10f, 12.0f);
-
+  const size_t directionalLightIndex = 0;
+  const size_t firstSpotLightIndex = directionalLightIndex + 1;
+  const size_t secondSpotLightIndex = directionalLightIndex + 2;
   // Directional: солнце типо
-  composeConstants.Lights[3].PositionWorldAndRange =
+  composeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[3].DirectionAndType =
+  composeConstants.Lights[directionalLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
-  composeConstants.Lights[3].ColorAndIntensity =
+  composeConstants.Lights[directionalLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 
   // Spot #1: спот щеленый
-  composeConstants.Lights[4].PositionWorldAndRange =
+  composeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 14445.0f);
-  composeConstants.Lights[4].DirectionAndType =
+  composeConstants.Lights[firstSpotLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.5f, -1.0f, 2.0f);
-  composeConstants.Lights[4].ColorAndIntensity =
+  composeConstants.Lights[firstSpotLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.0f, 5.0f);
-  composeConstants.Lights[4].Params =
+  composeConstants.Lights[firstSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
 
   // Spot #2: красный
-  composeConstants.Lights[5].PositionWorldAndRange =
+  composeConstants.Lights[secondSpotLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 155500.0f);
-  composeConstants.Lights[5].DirectionAndType =
+  composeConstants.Lights[secondSpotLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 1.0f, 2.0f);
-  composeConstants.Lights[5].ColorAndIntensity =
+  composeConstants.Lights[secondSpotLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 111.8f);
-  composeConstants.Lights[5].Params =
+  composeConstants.Lights[secondSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
 
   mComposeCB->CopyData(0, composeConstants);
