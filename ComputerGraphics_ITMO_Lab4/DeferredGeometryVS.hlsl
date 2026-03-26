@@ -1,6 +1,8 @@
 struct VS_INPUT {
     float3 Pos : POSITION;
     float3 Normal : NORMAL;
+    float3 Tangent : TANGENT;
+    float3 Bitangent : BITANGENT;
     float2 TexC : TEXCOORD;
     float4 Color : COLOR;
 };
@@ -9,6 +11,8 @@ struct VS_OUTPUT {
     float4 Pos : SV_POSITION;
     float3 WorldPos : WORLDPOS;
     float3 Normal : NORMAL;
+    float3 Tangent : TANGENT;
+    float3 Bitangent : BITANGENT;
     float2 TexC : TEXCOORD;
 };
 
@@ -24,6 +28,8 @@ VS_OUTPUT VS(VS_INPUT input) {
     output.Pos = mul(worldPos, gWorldViewProj);
     output.WorldPos = worldPos.xyz;
     output.Normal = normalize(mul(float4(input.Normal, 0.0f), gWorld).xyz);
+    output.Tangent = normalize(mul(float4(input.Tangent, 0.0f), gWorld).xyz);
+    output.Bitangent = normalize(mul(float4(input.Bitangent, 0.0f), gWorld).xyz);
     output.TexC = input.TexC;
 
     return output;

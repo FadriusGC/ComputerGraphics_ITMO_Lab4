@@ -359,6 +359,10 @@ void BoxApp::BuildBoxGeometry() {
 
   // Загружаем все текстуры, связанные с материалами
   LoadAllTextures();
+
+  for (UINT i = 0; i < numMaterials; ++i) {
+    mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
+  }
 }
 
 void BoxApp::CreateFallbackCube() {
@@ -491,6 +495,7 @@ void BoxApp::CreateFallbackCube() {
   defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
   defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
   defaultMat.Data.Roughness = 0.25f;
+  defaultMat.Data.HasNormalMap = 0.0f;
   defaultMat.Data.TexTransform = DirectX::SimpleMath::Matrix::Identity;
   mModelGeometry.Materials.push_back(defaultMat);
 }
@@ -499,23 +504,25 @@ void BoxApp::CreateFallbackCube() {
 
 void BoxApp::LoadAllTextures() {
   // Собираем уникальные пути текстур из материалов
-  std::unordered_map<std::string, int>
-      textureNameToIndex;  // имя файла -> индекс в mTextures
+  std::unordered_map<std::string, int> textureNameToIndex;
   std::vector<std::string> uniqueTexturePaths;
 
-  for (auto& mat : mModelGeometry.Materials) {
-    if (!mat.DiffuseTexture.empty()) {
-      if (textureNameToIndex.find(mat.DiffuseTexture) ==
-          textureNameToIndex.end()) {
-        int index = (int)uniqueTexturePaths.size();
-        textureNameToIndex[mat.DiffuseTexture] = index;
-        uniqueTexturePaths.push_back(mat.DiffuseTexture);
-      }
+  auto addTextureName = [&](const std::string& textureName) {
+    if (textureName.empty()) return;
+    if (textureNameToIndex.find(textureName) == textureNameToIndex.end()) {
+      int index = static_cast<int>(uniqueTexturePaths.size());
+      textureNameToIndex[textureName] = index;
+      uniqueTexturePaths.push_back(textureName);
     }
+  };
+
+  for (auto& mat : mModelGeometry.Materials) {
+    addTextureName(mat.DiffuseTexture);
+    addTextureName(mat.NormalTexture);
   }
 
   if (uniqueTexturePaths.empty()) {
-    OutputDebugStringA("No diffuse textures found.\n");
+    OutputDebugStringA("No textures found.\n");
     return;
   }
 
@@ -536,7 +543,7 @@ void BoxApp::LoadAllTextures() {
         texture->UploadHeap));
 
     // Сохраняем текстуру в вектор
-    int textureIndex = (int)mTextures.size();
+    int textureIndex = static_cast<int>(mTextures.size());
     mTextures.push_back(std::move(texture));
 
     // Создаём SRV для этой текстуры в куче по индексу
@@ -552,6 +559,16 @@ void BoxApp::LoadAllTextures() {
       if (it != textureNameToIndex.end()) {
         mat.DiffuseTextureIndex = it->second;
       }
+    }
+
+    if (!mat.NormalTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.NormalTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.NormalTextureIndex = it->second;
+        mat.Data.HasNormalMap = 1.0f;
+      }
+    } else {
+      mat.Data.HasNormalMap = 0.0f;
     }
   }
 

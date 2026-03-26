@@ -83,6 +83,27 @@ bool ModelLoader::LoadModel(const std::string& filePath,
             ("Diffuse texture: " + material.DiffuseTexture + "\n").c_str());
       }
 
+      aiString normalTexPath;
+      const bool hasNormalTexture =
+          aiMat->GetTexture(aiTextureType_NORMALS, 0, &normalTexPath) ==
+              AI_SUCCESS ||
+          aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) ==
+              AI_SUCCESS ||
+          aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &normalTexPath) ==
+              AI_SUCCESS;
+      if (hasNormalTexture) {
+        std::string fullPath = normalTexPath.C_Str();
+        size_t lastSlash = fullPath.find_last_of("/\\");
+        if (lastSlash != std::string::npos) {
+          material.NormalTexture = fullPath.substr(lastSlash + 1);
+        } else {
+          material.NormalTexture = fullPath;
+        }
+        material.Data.HasNormalMap = 1.0f;
+        OutputDebugStringA(
+            ("Normal texture: " + material.NormalTexture + "\n").c_str());
+      }
+
       outModelGeometry.Materials.push_back(material);
     }
   } else {
@@ -92,6 +113,7 @@ bool ModelLoader::LoadModel(const std::string& filePath,
     defaultMat.Data.DiffuseAlbedo = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
     defaultMat.Data.FresnelR0 = XMFLOAT3(0.01f, 0.01f, 0.01f);
     defaultMat.Data.Roughness = 0.25f;
+    defaultMat.Data.HasNormalMap = 0.0f;
     defaultMat.Data.TexTransform =
         DirectX::SimpleMath::Matrix::Identity;  // <--
     outModelGeometry.Materials.push_back(defaultMat);
@@ -121,6 +143,18 @@ bool ModelLoader::LoadModel(const std::string& filePath,
         vertex.Normal.z = mesh->mNormals[vertIdx].z;
       } else {
         vertex.Normal = {0.0f, 1.0f, 0.0f};
+      }
+
+      if (mesh->HasTangentsAndBitangents()) {
+        vertex.Tangent.x = mesh->mTangents[vertIdx].x;
+        vertex.Tangent.y = mesh->mTangents[vertIdx].y;
+        vertex.Tangent.z = mesh->mTangents[vertIdx].z;
+        vertex.Bitangent.x = mesh->mBitangents[vertIdx].x;
+        vertex.Bitangent.y = mesh->mBitangents[vertIdx].y;
+        vertex.Bitangent.z = mesh->mBitangents[vertIdx].z;
+      } else {
+        vertex.Tangent = {1.0f, 0.0f, 0.0f};
+        vertex.Bitangent = {0.0f, 1.0f, 0.0f};
       }
 
       if (mesh->HasTextureCoords(0)) {

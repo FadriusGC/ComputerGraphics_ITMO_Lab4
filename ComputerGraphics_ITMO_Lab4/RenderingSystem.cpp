@@ -44,28 +44,36 @@ void RenderingSystem::BuildInputLayout() {
                   {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
                   {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 }
 
 void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[4];
+  CD3DX12_ROOT_PARAMETER params[5];
 
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   params[0].InitAsDescriptorTable(1, &cbvTable0);
 
-  CD3DX12_DESCRIPTOR_RANGE srvTable;
-  srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-  params[1].InitAsDescriptorTable(1, &srvTable);
+  CD3DX12_DESCRIPTOR_RANGE diffuseSrvTable;
+  diffuseSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+  params[1].InitAsDescriptorTable(1, &diffuseSrvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE normalSrvTable;
+  normalSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
+  params[2].InitAsDescriptorTable(1, &normalSrvTable);
 
   CD3DX12_DESCRIPTOR_RANGE samplerTable;
   samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
-  params[2].InitAsDescriptorTable(1, &samplerTable);
+  params[3].InitAsDescriptorTable(1, &samplerTable);
 
-  params[3].InitAsConstantBufferView(2);
+  params[4].InitAsConstantBufferView(2);
 
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      4, params, 0, nullptr,
+      5, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -185,7 +193,7 @@ void RenderingSystem::Render(
   cmdList->SetGraphicsRootDescriptorTable(
       0, cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
   cmdList->SetGraphicsRootDescriptorTable(
-      2, samplerHeap->GetGPUDescriptorHandleForHeapStart());
+      3, samplerHeap->GetGPUDescriptorHandleForHeapStart());
 
   cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
   cmdList->IASetIndexBuffer(&indexBufferView);
@@ -193,22 +201,41 @@ void RenderingSystem::Render(
 
   const UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
 
+  if (!modelGeometry.Materials.empty() &&
+      modelGeometry.Materials[0].DiffuseTextureIndex >= 0) {
+    CD3DX12_GPU_DESCRIPTOR_HANDLE defaultTextureHandle(
+        cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(kTextureSrvStart +
+                         modelGeometry.Materials[0].DiffuseTextureIndex),
+        cbvSrvDescriptorSize);
+    cmdList->SetGraphicsRootDescriptorTable(1, defaultTextureHandle);
+    cmdList->SetGraphicsRootDescriptorTable(2, defaultTextureHandle);
+  }
+
   for (const auto& submesh : modelGeometry.Submeshes) {
     if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
       const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
 
       if (mat.DiffuseTextureIndex >= 0) {
-        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(
+        CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(
             cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
             static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
             cbvSrvDescriptorSize);
-        cmdList->SetGraphicsRootDescriptorTable(1, texHandle);
+        cmdList->SetGraphicsRootDescriptorTable(1, diffuseHandle);
+      }
+
+      if (mat.NormalTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE normalHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.NormalTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(2, normalHandle);
       }
 
       D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
           materialCB->Resource()->GetGPUVirtualAddress() +
           static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
-      cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
+      cmdList->SetGraphicsRootConstantBufferView(4, matCBAddress);
     }
 
     cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,

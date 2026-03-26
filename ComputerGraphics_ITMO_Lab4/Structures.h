@@ -12,6 +12,8 @@ struct Vertex {
   DirectX::SimpleMath::Vector3 Normal;
   DirectX::SimpleMath::Vector2 TexC;  // текстурные координаты
   DirectX::SimpleMath::Vector4 Color;
+  DirectX::SimpleMath::Vector3 Tangent = {1.0f, 0.0f, 0.0f};
+  DirectX::SimpleMath::Vector3 Bitangent = {0.0f, 1.0f, 0.0f};
 };
 
 struct Submesh {
