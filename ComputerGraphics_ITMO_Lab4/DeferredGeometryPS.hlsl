@@ -17,12 +17,16 @@ cbuffer cbMaterial : register(b2) {
     float3 gFresnelR0;
     float gRoughness;
     float gHasNormalMap;
-    float3 gPadding;
+    float gHasDisplacementMap;
+    float gHasRoughnessMap;
+    float gDisplacementScale;
     float4x4 gTexTransform;
 };
 
 Texture2D gDiffuseMap : register(t0);
 Texture2D gNormalMap : register(t1);
+Texture2D gDisplacementMap : register(t2);
+Texture2D gRoughnessMap : register(t3);
 SamplerState gSampler : register(s0);
 
 PS_OUTPUT PS(PS_INPUT input) {
@@ -43,6 +47,11 @@ PS_OUTPUT PS(PS_INPUT input) {
         worldNormal = normalize(mul(mapNormal, tbn));
     }
 
-    output.Normal = float4(worldNormal * 0.5f + 0.5f, 1.0f);
+    float roughness = saturate(gRoughness);
+    if (gHasRoughnessMap > 0.5f) {
+        roughness = saturate(gRoughnessMap.Sample(gSampler, transformedTexC).r);
+    }
+
+    output.Normal = float4(worldNormal * 0.5f + 0.5f, roughness);
     return output;
 }

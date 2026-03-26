@@ -32,6 +32,14 @@ struct ModelGeometry {
 struct ObjectConstants {
   DirectX::SimpleMath::Matrix World;
   DirectX::SimpleMath::Matrix WorldViewProj;
+  DirectX::SimpleMath::Vector4 CameraPosition;
+  DirectX::SimpleMath::Vector4 TessellationParams;
+};
+
+struct SceneObject {
+  UINT SubmeshStart = 0;
+  UINT SubmeshCount = 0;
+  DirectX::SimpleMath::Matrix World = DirectX::SimpleMath::Matrix::Identity;
 };
 
 struct LightConstants {

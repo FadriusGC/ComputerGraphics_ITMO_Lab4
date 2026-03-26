@@ -9,7 +9,9 @@ struct MaterialConstants {
   DirectX::SimpleMath::Vector3 FresnelR0 = {0.01f, 0.01f, 0.01f};
   float Roughness = 0.25f;
   float HasNormalMap = 0.0f;
-  DirectX::SimpleMath::Vector3 Padding = {0.0f, 0.0f, 0.0f};
+  float HasDisplacementMap = 0.0f;
+  float HasRoughnessMap = 0.0f;
+  float DisplacementScale = 0.0f;
   DirectX::SimpleMath::Matrix TexTransform =
       DirectX::SimpleMath::Matrix::Identity;
 };
@@ -21,5 +23,9 @@ struct Material {
   int DiffuseTextureIndex = -1;  // индекс в массиве mTextures (после загрузки)
   std::string NormalTexture;
   int NormalTextureIndex = -1;
+  std::string DisplacementTexture;
+  int DisplacementTextureIndex = -1;
+  std::string RoughnessTexture;
+  int RoughnessTextureIndex = -1;
   MaterialConstants Data;
 };

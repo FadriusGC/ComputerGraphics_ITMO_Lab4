@@ -28,6 +28,7 @@ class RenderingSystem {
               const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
               const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
               const ModelGeometry& modelGeometry,
+              const std::vector<SceneObject>& sceneObjects,
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,
               D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress);
@@ -47,6 +48,8 @@ class RenderingSystem {
 
   ComPtr<ID3DBlob> mGeometryVS;
   ComPtr<ID3DBlob> mGeometryPS;
+  ComPtr<ID3DBlob> mGeometryHS;
+  ComPtr<ID3DBlob> mGeometryDS;
   ComPtr<ID3DBlob> mComposeVS;
   ComPtr<ID3DBlob> mComposePS;
 
