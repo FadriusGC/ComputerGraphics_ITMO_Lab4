@@ -251,7 +251,7 @@ void BoxApp::BuildBoxGeometry() {
       mat.Data.HasNormalMap = 1.0f;
       mat.Data.HasDisplacementMap = 1.0f;
       mat.Data.HasRoughnessMap = 1.0f;
-      mat.Data.DisplacementScale = 10.0f;
+      mat.Data.DisplacementScale = 0.35f;
     }
   }
 
@@ -920,12 +920,11 @@ void BoxApp::Update(const GameTimer& gt) {
                                                     mCamPos.z, 1.0f);
   const DirectX::SimpleMath::Vector4 tessellationParams(25.0f, 350.0f, 12.0f,
                                                         1.0f);
-
+  const DirectX::SimpleMath::Matrix viewProj = mView * mProj;
   for (size_t i = 0; i < mSceneObjects.size(); ++i) {
     ObjectConstants objConstants;
-    objConstants.World = mSceneObjects[i].World;
-    objConstants.WorldViewProj =
-        (mSceneObjects[i].World * mView * mProj).Transpose();
+    objConstants.World = mSceneObjects[i].World.Transpose();
+    objConstants.WorldViewProj = viewProj.Transpose();
     objConstants.CameraPosition = cameraPosition;
     objConstants.TessellationParams = tessellationParams;
     mObjectCB->CopyData(static_cast<int>(i), objConstants);
@@ -940,7 +939,6 @@ void BoxApp::Update(const GameTimer& gt) {
   mLightCB->CopyData(0, lightConstants);
 
   ComposeConstants composeConstants = {};
-  DirectX::SimpleMath::Matrix viewProj = mView * mProj;
   composeConstants.InvViewProj = viewProj.Invert().Transpose();
   composeConstants.CameraPosition =
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
