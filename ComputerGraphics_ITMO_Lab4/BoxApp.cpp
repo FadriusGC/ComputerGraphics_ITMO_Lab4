@@ -226,6 +226,11 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
+  const float kSponzaScale = 0.08f;
+  const DirectX::SimpleMath::Vector3 kSponzaPosition(-120.0f, 0.0f, 0.0f);
+
+  const float kMountainScale = 100.0f;
+  const DirectX::SimpleMath::Vector3 kMountainPosition(140.0f, -10.0f, 30.0f);
   ModelGeometry sponzaGeometry;
   ModelGeometry mountainGeometry;
   mSceneObjects.clear();
@@ -251,7 +256,7 @@ void BoxApp::BuildBoxGeometry() {
       mat.Data.HasNormalMap = 1.0f;
       mat.Data.HasDisplacementMap = 1.0f;
       mat.Data.HasRoughnessMap = 1.0f;
-      mat.Data.DisplacementScale = 0.35f;
+      mat.Data.DisplacementScale = 0.01f;
     }
   }
 
@@ -305,17 +310,17 @@ void BoxApp::BuildBoxGeometry() {
     };
 
     if (sponzaLoaded) {
-      appendGeometry(sponzaGeometry,
-                     DirectX::SimpleMath::Matrix::CreateScale(0.08f) *
-                         DirectX::SimpleMath::Matrix::CreateTranslation(
-                             -120.0f, 0.0f, 0.0f));
+      appendGeometry(
+          sponzaGeometry,
+          DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition));
     }
 
     if (mountainLoaded) {
       appendGeometry(mountainGeometry,
-                     DirectX::SimpleMath::Matrix::CreateScale(0.12f) *
+                     DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
                          DirectX::SimpleMath::Matrix::CreateTranslation(
-                             120.0f, -10.0f, 30.0f));
+                             kMountainPosition));
     }
   }
 
