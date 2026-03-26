@@ -264,63 +264,70 @@ void BoxApp::BuildBoxGeometry() {
     MessageBoxA(nullptr, "Failed to load both models. Using fallback cube.",
                 "Warning", MB_OK);
     CreateFallbackCube();
-    mSceneObjects.push_back({0,
-                             static_cast<UINT>(mModelGeometry.Submeshes.size()),
-                             DirectX::SimpleMath::Matrix::Identity});
+    mSceneObjects.push_back(
+        {0, static_cast<UINT>(mModelGeometry.Submeshes.size()),
+         DirectX::SimpleMath::Matrix::Identity,
+         DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f)});
   } else {
-    auto appendGeometry = [&](const ModelGeometry& src,
-                              const DirectX::SimpleMath::Matrix& world) {
-      if (src.Vertices.empty() || src.Submeshes.empty()) {
-        return;
-      }
+    auto appendGeometry =
+        [&](const ModelGeometry& src, const DirectX::SimpleMath::Matrix& world,
+            const DirectX::SimpleMath::Vector4& tessellationParams) {
+          if (src.Vertices.empty() || src.Submeshes.empty()) {
+            return;
+          }
 
-      SceneObject object;
-      object.SubmeshStart = static_cast<UINT>(mModelGeometry.Submeshes.size());
-      object.SubmeshCount = static_cast<UINT>(src.Submeshes.size());
-      object.World = world;
+          SceneObject object;
+          object.SubmeshStart =
+              static_cast<UINT>(mModelGeometry.Submeshes.size());
+          object.SubmeshCount = static_cast<UINT>(src.Submeshes.size());
+          object.World = world;
+          object.TessellationParams = tessellationParams;
 
-      const uint32_t vertexOffset =
-          static_cast<uint32_t>(mModelGeometry.Vertices.size());
-      const uint32_t indexOffset =
-          static_cast<uint32_t>(mModelGeometry.Indices.size());
-      const uint32_t materialOffset =
-          static_cast<uint32_t>(mModelGeometry.Materials.size());
+          const uint32_t vertexOffset =
+              static_cast<uint32_t>(mModelGeometry.Vertices.size());
+          const uint32_t indexOffset =
+              static_cast<uint32_t>(mModelGeometry.Indices.size());
+          const uint32_t materialOffset =
+              static_cast<uint32_t>(mModelGeometry.Materials.size());
 
-      mModelGeometry.Vertices.insert(mModelGeometry.Vertices.end(),
-                                     src.Vertices.begin(), src.Vertices.end());
+          mModelGeometry.Vertices.insert(mModelGeometry.Vertices.end(),
+                                         src.Vertices.begin(),
+                                         src.Vertices.end());
 
-      for (auto index : src.Indices) {
-        mModelGeometry.Indices.push_back(index + vertexOffset);
-      }
+          for (auto index : src.Indices) {
+            mModelGeometry.Indices.push_back(index + vertexOffset);
+          }
 
-      for (const auto& srcMaterial : src.Materials) {
-        Material copied = srcMaterial;
-        copied.MatCBIndex = -1;
-        mModelGeometry.Materials.push_back(copied);
-      }
+          for (const auto& srcMaterial : src.Materials) {
+            Material copied = srcMaterial;
+            copied.MatCBIndex = -1;
+            mModelGeometry.Materials.push_back(copied);
+          }
 
-      for (const auto& srcSubmesh : src.Submeshes) {
-        Submesh copied = srcSubmesh;
-        copied.StartIndexLocation += indexOffset;
-        copied.MaterialIndex += materialOffset;
-        mModelGeometry.Submeshes.push_back(copied);
-      }
+          for (const auto& srcSubmesh : src.Submeshes) {
+            Submesh copied = srcSubmesh;
+            copied.StartIndexLocation += indexOffset;
+            copied.MaterialIndex += materialOffset;
+            mModelGeometry.Submeshes.push_back(copied);
+          }
 
-      mSceneObjects.push_back(object);
-    };
+          mSceneObjects.push_back(object);
+        };
 
     if (sponzaLoaded) {
       appendGeometry(
           sponzaGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
-              DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition));
+              DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
+          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f));
     }
 
     if (mountainLoaded) {
-      appendGeometry(mountainGeometry,
-                     DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
-                         DirectX::SimpleMath::Matrix::CreateTranslation(
-                             kMountainPosition));
+      appendGeometry(
+          mountainGeometry,
+          DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(kMountainPosition),
+          DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f));
     }
   }
 
@@ -923,15 +930,13 @@ void BoxApp::Update(const GameTimer& gt) {
   // Матрица мира
   const DirectX::SimpleMath::Vector4 cameraPosition(mCamPos.x, mCamPos.y,
                                                     mCamPos.z, 1.0f);
-  const DirectX::SimpleMath::Vector4 tessellationParams(25.0f, 350.0f, 12.0f,
-                                                        1.0f);
   const DirectX::SimpleMath::Matrix viewProj = mView * mProj;
   for (size_t i = 0; i < mSceneObjects.size(); ++i) {
     ObjectConstants objConstants;
     objConstants.World = mSceneObjects[i].World.Transpose();
     objConstants.WorldViewProj = viewProj.Transpose();
     objConstants.CameraPosition = cameraPosition;
-    objConstants.TessellationParams = tessellationParams;
+    objConstants.TessellationParams = mSceneObjects[i].TessellationParams;
     mObjectCB->CopyData(static_cast<int>(i), objConstants);
   }
 

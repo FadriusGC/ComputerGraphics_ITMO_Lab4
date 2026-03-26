@@ -40,6 +40,8 @@ struct SceneObject {
   UINT SubmeshStart = 0;
   UINT SubmeshCount = 0;
   DirectX::SimpleMath::Matrix World = DirectX::SimpleMath::Matrix::Identity;
+  DirectX::SimpleMath::Vector4 TessellationParams =
+      DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
 };
 
 struct LightConstants {
