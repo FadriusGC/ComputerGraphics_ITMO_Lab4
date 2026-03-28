@@ -157,23 +157,6 @@ void BoxApp::BuildConstantBuffers() {
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
   mComposeCB = std::unique_ptr<UploadBuffer<ComposeConstants>>(
       new UploadBuffer<ComposeConstants>(mDevice.Get(), 1, true));
-
-  D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
-  cbvDescObject.BufferLocation = mObjectCB->Resource()->GetGPUVirtualAddress();
-  cbvDescObject.SizeInBytes = (sizeof(ObjectConstants) + 255) & ~255;
-
-  D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescLight = {};
-  cbvDescLight.BufferLocation = mLightCB->Resource()->GetGPUVirtualAddress();
-  cbvDescLight.SizeInBytes = (sizeof(LightConstants) + 255) & ~255;
-
-  // Первый дескриптор – object CBV
-  mDevice->CreateConstantBufferView(
-      &cbvDescObject, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
-
-  // Второй дескриптор – light CBV
-  CD3DX12_CPU_DESCRIPTOR_HANDLE lightCbvHandle(
-      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), 1, mCbvSrvDescriptorSize);
-  mDevice->CreateConstantBufferView(&cbvDescLight, lightCbvHandle);
 }
 
 void BoxApp::BuildRootSignature() {
@@ -243,21 +226,109 @@ void BoxApp::BuildShadersAndInputLayout() {
 }
 
 void BoxApp::BuildBoxGeometry() {
-  std::string modelPath =
+  const float kSponzaScale = 0.08f;
+  const DirectX::SimpleMath::Vector3 kSponzaPosition(-120.0f, 0.0f, 0.0f);
+
+  const float kMountainScale = 100.0f;
+  const DirectX::SimpleMath::Vector3 kMountainPosition(140.0f, -10.0f, 30.0f);
+  ModelGeometry sponzaGeometry;
+  ModelGeometry mountainGeometry;
+  mSceneObjects.clear();
+  mModelGeometry = {};
+
+  const std::string sponzaPath =
       "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       "ComputerGraphics_ITMO_Lab4/sponza.obj";
+  const std::string mountainPath =
+      "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      "ComputerGraphics_ITMO_Lab4/Mountain.obj";
 
-  if (!ModelLoader::LoadModel(modelPath, mModelGeometry)) {
-    MessageBoxA(nullptr, "Failed to load model. Using fallback cube.",
+  const bool sponzaLoaded = ModelLoader::LoadModel(sponzaPath, sponzaGeometry);
+  const bool mountainLoaded =
+      ModelLoader::LoadModel(mountainPath, mountainGeometry);
+
+  if (!mountainGeometry.Materials.empty()) {
+    for (auto& mat : mountainGeometry.Materials) {
+      mat.DiffuseTexture = "aerial_grass_rock_diff_4k.dds";
+      mat.NormalTexture = "aerial_grass_rock_nor_gl_4k.dds";
+      mat.DisplacementTexture = "aerial_grass_rock_disp_4k.dds";
+      mat.RoughnessTexture = "aerial_grass_rock_rough_4k.dds";
+      mat.Data.HasNormalMap = 1.0f;
+      mat.Data.HasDisplacementMap = 1.0f;
+      mat.Data.HasRoughnessMap = 1.0f;
+      mat.Data.DisplacementScale = 0.01f;
+    }
+  }
+
+  if (!sponzaLoaded && !mountainLoaded) {
+    MessageBoxA(nullptr, "Failed to load both models. Using fallback cube.",
                 "Warning", MB_OK);
     CreateFallbackCube();
+    mSceneObjects.push_back(
+        {0, static_cast<UINT>(mModelGeometry.Submeshes.size()),
+         DirectX::SimpleMath::Matrix::Identity,
+         DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f)});
   } else {
-    char buf[256];
-    sprintf_s(
-        buf, "Loaded %zu vertices, %zu indices, %zu submeshes, %zu materials\n",
-        mModelGeometry.Vertices.size(), mModelGeometry.Indices.size(),
-        mModelGeometry.Submeshes.size(), mModelGeometry.Materials.size());
-    OutputDebugStringA(buf);
+    auto appendGeometry =
+        [&](const ModelGeometry& src, const DirectX::SimpleMath::Matrix& world,
+            const DirectX::SimpleMath::Vector4& tessellationParams) {
+          if (src.Vertices.empty() || src.Submeshes.empty()) {
+            return;
+          }
+
+          SceneObject object;
+          object.SubmeshStart =
+              static_cast<UINT>(mModelGeometry.Submeshes.size());
+          object.SubmeshCount = static_cast<UINT>(src.Submeshes.size());
+          object.World = world;
+          object.TessellationParams = tessellationParams;
+
+          const uint32_t vertexOffset =
+              static_cast<uint32_t>(mModelGeometry.Vertices.size());
+          const uint32_t indexOffset =
+              static_cast<uint32_t>(mModelGeometry.Indices.size());
+          const uint32_t materialOffset =
+              static_cast<uint32_t>(mModelGeometry.Materials.size());
+
+          mModelGeometry.Vertices.insert(mModelGeometry.Vertices.end(),
+                                         src.Vertices.begin(),
+                                         src.Vertices.end());
+
+          for (auto index : src.Indices) {
+            mModelGeometry.Indices.push_back(index + vertexOffset);
+          }
+
+          for (const auto& srcMaterial : src.Materials) {
+            Material copied = srcMaterial;
+            copied.MatCBIndex = -1;
+            mModelGeometry.Materials.push_back(copied);
+          }
+
+          for (const auto& srcSubmesh : src.Submeshes) {
+            Submesh copied = srcSubmesh;
+            copied.StartIndexLocation += indexOffset;
+            copied.MaterialIndex += materialOffset;
+            mModelGeometry.Submeshes.push_back(copied);
+          }
+
+          mSceneObjects.push_back(object);
+        };
+
+    if (sponzaLoaded) {
+      appendGeometry(
+          sponzaGeometry,
+          DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
+          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f));
+    }
+
+    if (mountainLoaded) {
+      appendGeometry(
+          mountainGeometry,
+          DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(kMountainPosition),
+          DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f));
+    }
   }
 
   if (mModelGeometry.Materials.empty()) {
@@ -270,20 +341,39 @@ void BoxApp::BuildBoxGeometry() {
   }
 
   // Создаём буфер материалов
-  UINT numMaterials = (UINT)mModelGeometry.Materials.size();
+  mObjectCB = std::unique_ptr<UploadBuffer<ObjectConstants>>(
+      new UploadBuffer<ObjectConstants>(
+          mDevice.Get(),
+          static_cast<UINT>(std::max<size_t>(1, mSceneObjects.size())), true));
+
+  const UINT cbvDescSize = (sizeof(ObjectConstants) + 255) & ~255;
+  for (UINT i = 0;
+       i < static_cast<UINT>(std::max<size_t>(1, mSceneObjects.size())); ++i) {
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDescObject = {};
+    cbvDescObject.BufferLocation =
+        mObjectCB->Resource()->GetGPUVirtualAddress() +
+        static_cast<UINT64>(i) * cbvDescSize;
+    cbvDescObject.SizeInBytes = cbvDescSize;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE objectCbvHandle(
+        mCbvHeap->GetCPUDescriptorHandleForHeapStart(), static_cast<INT>(i),
+        mCbvSrvDescriptorSize);
+    mDevice->CreateConstantBufferView(&cbvDescObject, objectCbvHandle);
+  }
+
+  UINT numMaterials = static_cast<UINT>(mModelGeometry.Materials.size());
   mMaterialCB = std::unique_ptr<UploadBuffer<MaterialConstants>>(
       new UploadBuffer<MaterialConstants>(mDevice.Get(), numMaterials, true));
 
   for (UINT i = 0; i < numMaterials; ++i) {
     mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
-    mModelGeometry.Materials[i].MatCBIndex = i;
+    mModelGeometry.Materials[i].MatCBIndex = static_cast<int>(i);
   }
 
   mVertexBufferByteSize =
-      (UINT)(mModelGeometry.Vertices.size() * sizeof(Vertex));
+      static_cast<UINT>(mModelGeometry.Vertices.size() * sizeof(Vertex));
   mIndexBufferByteSize =
-      (UINT)(mModelGeometry.Indices.size() * sizeof(uint32_t));
-  mIndexCount = (UINT)mModelGeometry.Indices.size();
+      static_cast<UINT>(mModelGeometry.Indices.size() * sizeof(uint32_t));
+  mIndexCount = static_cast<UINT>(mModelGeometry.Indices.size());
 
   // Вершинный буфер
   {
@@ -359,6 +449,10 @@ void BoxApp::BuildBoxGeometry() {
 
   // Загружаем все текстуры, связанные с материалами
   LoadAllTextures();
+
+  for (UINT i = 0; i < numMaterials; ++i) {
+    mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
+  }
 }
 
 void BoxApp::CreateFallbackCube() {
@@ -491,6 +585,7 @@ void BoxApp::CreateFallbackCube() {
   defaultMat.Data.DiffuseAlbedo = {0.8f, 0.8f, 0.8f, 1.0f};
   defaultMat.Data.FresnelR0 = {0.01f, 0.01f, 0.01f};
   defaultMat.Data.Roughness = 0.25f;
+  defaultMat.Data.HasNormalMap = 0.0f;
   defaultMat.Data.TexTransform = DirectX::SimpleMath::Matrix::Identity;
   mModelGeometry.Materials.push_back(defaultMat);
 }
@@ -499,23 +594,27 @@ void BoxApp::CreateFallbackCube() {
 
 void BoxApp::LoadAllTextures() {
   // Собираем уникальные пути текстур из материалов
-  std::unordered_map<std::string, int>
-      textureNameToIndex;  // имя файла -> индекс в mTextures
+  std::unordered_map<std::string, int> textureNameToIndex;
   std::vector<std::string> uniqueTexturePaths;
 
-  for (auto& mat : mModelGeometry.Materials) {
-    if (!mat.DiffuseTexture.empty()) {
-      if (textureNameToIndex.find(mat.DiffuseTexture) ==
-          textureNameToIndex.end()) {
-        int index = (int)uniqueTexturePaths.size();
-        textureNameToIndex[mat.DiffuseTexture] = index;
-        uniqueTexturePaths.push_back(mat.DiffuseTexture);
-      }
+  auto addTextureName = [&](const std::string& textureName) {
+    if (textureName.empty()) return;
+    if (textureNameToIndex.find(textureName) == textureNameToIndex.end()) {
+      int index = static_cast<int>(uniqueTexturePaths.size());
+      textureNameToIndex[textureName] = index;
+      uniqueTexturePaths.push_back(textureName);
     }
+  };
+
+  for (auto& mat : mModelGeometry.Materials) {
+    addTextureName(mat.DiffuseTexture);
+    addTextureName(mat.NormalTexture);
+    addTextureName(mat.DisplacementTexture);
+    addTextureName(mat.RoughnessTexture);
   }
 
   if (uniqueTexturePaths.empty()) {
-    OutputDebugStringA("No diffuse textures found.\n");
+    OutputDebugStringA("No textures found.\n");
     return;
   }
 
@@ -536,7 +635,7 @@ void BoxApp::LoadAllTextures() {
         texture->UploadHeap));
 
     // Сохраняем текстуру в вектор
-    int textureIndex = (int)mTextures.size();
+    int textureIndex = static_cast<int>(mTextures.size());
     mTextures.push_back(std::move(texture));
 
     // Создаём SRV для этой текстуры в куче по индексу
@@ -552,6 +651,36 @@ void BoxApp::LoadAllTextures() {
       if (it != textureNameToIndex.end()) {
         mat.DiffuseTextureIndex = it->second;
       }
+    }
+
+    if (!mat.NormalTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.NormalTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.NormalTextureIndex = it->second;
+        mat.Data.HasNormalMap = 1.0f;
+      }
+    } else {
+      mat.Data.HasNormalMap = 0.0f;
+    }
+
+    if (!mat.DisplacementTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.DisplacementTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.DisplacementTextureIndex = it->second;
+        mat.Data.HasDisplacementMap = 1.0f;
+      }
+    } else {
+      mat.Data.HasDisplacementMap = 0.0f;
+    }
+
+    if (!mat.RoughnessTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.RoughnessTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.RoughnessTextureIndex = it->second;
+        mat.Data.HasRoughnessMap = 1.0f;
+      }
+    } else {
+      mat.Data.HasRoughnessMap = 0.0f;
     }
   }
 
@@ -799,27 +928,27 @@ void BoxApp::Update(const GameTimer& gt) {
       mCamPos, target, DirectX::SimpleMath::Vector3(0.0f, 1.0f, 0.0f));
 
   // Матрица мира
-  float scale = 0.5f;
-  mWorld = DirectX::SimpleMath::Matrix::CreateScale(scale);
-
-  DirectX::SimpleMath::Matrix worldViewProj = mWorld * mView * mProj;
-
-  ObjectConstants objConstants;
-  objConstants.World = mWorld;
-  objConstants.WorldViewProj = worldViewProj.Transpose();
-  mObjectCB->CopyData(0, objConstants);
+  const DirectX::SimpleMath::Vector4 cameraPosition(mCamPos.x, mCamPos.y,
+                                                    mCamPos.z, 1.0f);
+  const DirectX::SimpleMath::Matrix viewProj = mView * mProj;
+  for (size_t i = 0; i < mSceneObjects.size(); ++i) {
+    ObjectConstants objConstants;
+    objConstants.World = mSceneObjects[i].World.Transpose();
+    objConstants.WorldViewProj = viewProj.Transpose();
+    objConstants.CameraPosition = cameraPosition;
+    objConstants.TessellationParams = mSceneObjects[i].TessellationParams;
+    mObjectCB->CopyData(static_cast<int>(i), objConstants);
+  }
 
   LightConstants lightConstants;
   lightConstants.LightPosition =
       DirectX::SimpleMath::Vector4(3.0f, 3.0f, 3.0f, 1.0f);
   lightConstants.LightColor =
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
-  lightConstants.CameraPosition =
-      DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
+  lightConstants.CameraPosition = cameraPosition;
   mLightCB->CopyData(0, lightConstants);
 
   ComposeConstants composeConstants = {};
-  DirectX::SimpleMath::Matrix viewProj = mView * mProj;
   composeConstants.InvViewProj = viewProj.Invert().Transpose();
   composeConstants.CameraPosition =
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
@@ -926,13 +1055,14 @@ void BoxApp::Update(const GameTimer& gt) {
 void BoxApp::Draw(const GameTimer& gt) {
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
-  mRenderingSystem.Render(
-      mCommandList.Get(), CurrentBackBufferView(),
-      mSwapChainBuffers[mCurrBackBuffer].Get(), DepthStencilView(),
-      mCbvHeap.Get(), mSamplerHeap.Get(), mCbvSrvDescriptorSize,
-      mScreenViewport, mScissorRect, mVertexBufferView, mIndexBufferView,
-      mModelGeometry, mMaterialCB.get(), mDepthStencilBuffer.Get(),
-      mComposeCB->Resource()->GetGPUVirtualAddress());
+  mRenderingSystem.Render(mCommandList.Get(), CurrentBackBufferView(),
+                          mSwapChainBuffers[mCurrBackBuffer].Get(),
+                          DepthStencilView(), mCbvHeap.Get(),
+                          mSamplerHeap.Get(), mCbvSrvDescriptorSize,
+                          mScreenViewport, mScissorRect, mVertexBufferView,
+                          mIndexBufferView, mModelGeometry, mSceneObjects,
+                          mMaterialCB.get(), mDepthStencilBuffer.Get(),
+                          mComposeCB->Resource()->GetGPUVirtualAddress());
 
   ThrowIfFailed(mCommandList->Close());
 

@@ -34,7 +34,7 @@ float3 ReconstructWorldPos(float2 uv, float depth) {
     return worldPos.xyz / max(worldPos.w, 1e-6f);
 }
 
-float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir) {
+float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir, float roughness) {
     float3 radiance = light.ColorAndIntensity.rgb * light.ColorAndIntensity.a;
     float3 L = 0.0f;
     float attenuation = 1.0f;
@@ -66,18 +66,22 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     float3 diffuse = radiance * NdotL * attenuation;
 
     float3 halfVec = normalize(L + viewDir);
-    float spec = pow(saturate(dot(normal, halfVec)), 32.0f) * attenuation;
-    float3 specular = radiance * spec * 0.2f;
+    float specPower = lerp(64.0f, 4.0f, saturate(roughness));
+    float specStrength = lerp(0.25f, 0.04f, saturate(roughness));
+    float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation;
+    float3 specular = radiance * spec * specStrength;
 
     return diffuse + specular;
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
     float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
-    float3 encodedNormal = gNormal.Sample(gSampler, input.TexC).xyz;
+    float4 normalSample = gNormal.Sample(gSampler, input.TexC);
+    float3 encodedNormal = normalSample.xyz;
     float depth = gDepth.Sample(gSampler, input.TexC).r;
 
     float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
+    float roughness = saturate(normalSample.a);
     float3 worldPos = ReconstructWorldPos(input.TexC, depth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
 
@@ -87,7 +91,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     [loop]
     for (uint i = 0; i < lightCount; ++i) {
         uint lightType = (uint)gLights[i].DirectionAndType.w;
-        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir);
+        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness);
     }
 
     return float4(saturate(color), albedo.a);

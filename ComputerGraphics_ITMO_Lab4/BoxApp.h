@@ -162,6 +162,7 @@ class BoxApp {
 
   // Геометрия модели
   ModelGeometry mModelGeometry;
+  std::vector<SceneObject> mSceneObjects;
   UINT mVertexBufferByteSize = 0;
   UINT mIndexBufferByteSize = 0;
   D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;

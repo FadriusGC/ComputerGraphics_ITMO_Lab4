@@ -26,6 +26,14 @@ void RenderingSystem::BuildShaders() {
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/DeferredGeometryPS.hlsl",
       "PS", "ps_5_0");
+  mGeometryHS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/DeferredGeometryHS.hlsl",
+      "HS", "hs_5_0");
+  mGeometryDS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/DeferredGeometryDS.hlsl",
+      "DS", "ds_5_0");
   mComposeVS = ShaderHelper::CompileShader(
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/DeferredComposeVS.hlsl",
@@ -44,28 +52,44 @@ void RenderingSystem::BuildInputLayout() {
                   {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
                   {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+                   D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                  {"BITANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60,
                    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
 }
 
 void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[4];
+  CD3DX12_ROOT_PARAMETER params[7];
 
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   params[0].InitAsDescriptorTable(1, &cbvTable0);
 
-  CD3DX12_DESCRIPTOR_RANGE srvTable;
-  srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-  params[1].InitAsDescriptorTable(1, &srvTable);
+  CD3DX12_DESCRIPTOR_RANGE diffuseSrvTable;
+  diffuseSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+  params[1].InitAsDescriptorTable(1, &diffuseSrvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE normalSrvTable;
+  normalSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
+  params[2].InitAsDescriptorTable(1, &normalSrvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE displacementSrvTable;
+  displacementSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2);
+  params[3].InitAsDescriptorTable(1, &displacementSrvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE roughnessSrvTable;
+  roughnessSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3);
+  params[4].InitAsDescriptorTable(1, &roughnessSrvTable);
 
   CD3DX12_DESCRIPTOR_RANGE samplerTable;
   samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
-  params[2].InitAsDescriptorTable(1, &samplerTable);
+  params[5].InitAsDescriptorTable(1, &samplerTable);
 
-  params[3].InitAsConstantBufferView(2);
+  params[6].InitAsConstantBufferView(2);
 
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      4, params, 0, nullptr,
+      7, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -112,6 +136,10 @@ void RenderingSystem::BuildGeometryPSO(ID3D12Device* device) {
             mGeometryVS->GetBufferSize()};
   pso.PS = {reinterpret_cast<BYTE*>(mGeometryPS->GetBufferPointer()),
             mGeometryPS->GetBufferSize()};
+  pso.HS = {reinterpret_cast<BYTE*>(mGeometryHS->GetBufferPointer()),
+            mGeometryHS->GetBufferSize()};
+  pso.DS = {reinterpret_cast<BYTE*>(mGeometryDS->GetBufferPointer()),
+            mGeometryDS->GetBufferSize()};
 
   CD3DX12_RASTERIZER_DESC rast(D3D12_DEFAULT);
   rast.CullMode = D3D12_CULL_MODE_NONE;
@@ -119,7 +147,7 @@ void RenderingSystem::BuildGeometryPSO(ID3D12Device* device) {
   pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
   pso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
   pso.SampleMask = UINT_MAX;
-  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
   pso.NumRenderTargets = 2;
   pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
   pso.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -169,6 +197,7 @@ void RenderingSystem::Render(
     const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
     const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     const ModelGeometry& modelGeometry,
+    const std::vector<SceneObject>& sceneObjects,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
     D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress) {
   cmdList->RSSetViewports(1, &viewport);
@@ -183,36 +212,84 @@ void RenderingSystem::Render(
   mGBuffer.BeginGeometryPass(cmdList, dsvHandle);
 
   cmdList->SetGraphicsRootDescriptorTable(
-      0, cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
-  cmdList->SetGraphicsRootDescriptorTable(
-      2, samplerHeap->GetGPUDescriptorHandleForHeapStart());
+      5, samplerHeap->GetGPUDescriptorHandleForHeapStart());
 
   cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
   cmdList->IASetIndexBuffer(&indexBufferView);
-  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  cmdList->IASetPrimitiveTopology(
+      D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
 
   const UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
 
-  for (const auto& submesh : modelGeometry.Submeshes) {
-    if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
-      const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
+  if (!modelGeometry.Materials.empty() &&
+      modelGeometry.Materials[0].DiffuseTextureIndex >= 0) {
+    CD3DX12_GPU_DESCRIPTOR_HANDLE defaultTextureHandle(
+        cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(kTextureSrvStart +
+                         modelGeometry.Materials[0].DiffuseTextureIndex),
+        cbvSrvDescriptorSize);
+    cmdList->SetGraphicsRootDescriptorTable(1, defaultTextureHandle);
+    cmdList->SetGraphicsRootDescriptorTable(2, defaultTextureHandle);
+    cmdList->SetGraphicsRootDescriptorTable(3, defaultTextureHandle);
+    cmdList->SetGraphicsRootDescriptorTable(4, defaultTextureHandle);
+  }
 
-      if (mat.DiffuseTextureIndex >= 0) {
-        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(
-            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-            static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
-            cbvSrvDescriptorSize);
-        cmdList->SetGraphicsRootDescriptorTable(1, texHandle);
+  for (size_t objectIndex = 0; objectIndex < sceneObjects.size();
+       ++objectIndex) {
+    CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
+        cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(objectIndex), cbvSrvDescriptorSize);
+    cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
+
+    const auto& sceneObject = sceneObjects[objectIndex];
+    const UINT submeshEnd = sceneObject.SubmeshStart + sceneObject.SubmeshCount;
+    for (UINT submeshIndex = sceneObject.SubmeshStart;
+         submeshIndex < submeshEnd; ++submeshIndex) {
+      const auto& submesh = modelGeometry.Submeshes[submeshIndex];
+      if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
+        const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
+
+        if (mat.DiffuseTextureIndex >= 0) {
+          CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(
+              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+              static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
+              cbvSrvDescriptorSize);
+          cmdList->SetGraphicsRootDescriptorTable(1, diffuseHandle);
+        }
+
+        if (mat.NormalTextureIndex >= 0) {
+          CD3DX12_GPU_DESCRIPTOR_HANDLE normalHandle(
+              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+              static_cast<INT>(kTextureSrvStart + mat.NormalTextureIndex),
+              cbvSrvDescriptorSize);
+          cmdList->SetGraphicsRootDescriptorTable(2, normalHandle);
+        }
+
+        if (mat.DisplacementTextureIndex >= 0) {
+          CD3DX12_GPU_DESCRIPTOR_HANDLE displacementHandle(
+              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+              static_cast<INT>(kTextureSrvStart + mat.DisplacementTextureIndex),
+              cbvSrvDescriptorSize);
+          cmdList->SetGraphicsRootDescriptorTable(3, displacementHandle);
+        }
+
+        if (mat.RoughnessTextureIndex >= 0) {
+          CD3DX12_GPU_DESCRIPTOR_HANDLE roughnessHandle(
+              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+              static_cast<INT>(kTextureSrvStart + mat.RoughnessTextureIndex),
+              cbvSrvDescriptorSize);
+          cmdList->SetGraphicsRootDescriptorTable(4, roughnessHandle);
+        }
+
+        D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
+            materialCB->Resource()->GetGPUVirtualAddress() +
+            static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
+        cmdList->SetGraphicsRootConstantBufferView(6, matCBAddress);
       }
 
-      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
-          materialCB->Resource()->GetGPUVirtualAddress() +
-          static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
-      cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
+      cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                    submesh.StartIndexLocation, 0, 0);
     }
-
-    cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
-                                  submesh.StartIndexLocation, 0, 0);
   }
 
   mGBuffer.EndGeometryPass(cmdList);

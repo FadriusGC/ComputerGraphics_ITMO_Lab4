@@ -12,6 +12,8 @@ struct Vertex {
   DirectX::SimpleMath::Vector3 Normal;
   DirectX::SimpleMath::Vector2 TexC;  // текстурные координаты
   DirectX::SimpleMath::Vector4 Color;
+  DirectX::SimpleMath::Vector3 Tangent = {1.0f, 0.0f, 0.0f};
+  DirectX::SimpleMath::Vector3 Bitangent = {0.0f, 1.0f, 0.0f};
 };
 
 struct Submesh {
@@ -30,6 +32,16 @@ struct ModelGeometry {
 struct ObjectConstants {
   DirectX::SimpleMath::Matrix World;
   DirectX::SimpleMath::Matrix WorldViewProj;
+  DirectX::SimpleMath::Vector4 CameraPosition;
+  DirectX::SimpleMath::Vector4 TessellationParams;
+};
+
+struct SceneObject {
+  UINT SubmeshStart = 0;
+  UINT SubmeshCount = 0;
+  DirectX::SimpleMath::Matrix World = DirectX::SimpleMath::Matrix::Identity;
+  DirectX::SimpleMath::Vector4 TessellationParams =
+      DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
 };
 
 struct LightConstants {
