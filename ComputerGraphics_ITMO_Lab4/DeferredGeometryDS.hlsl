@@ -25,6 +25,7 @@ cbuffer cbPerObject : register(b0) {
     float4x4 gWorldViewProj;
     float4 gCameraPosition;
     float4 gTessellationParams;
+    float4 gWaveParams;
 };
 
 cbuffer cbMaterial : register(b2) {
@@ -53,10 +54,11 @@ DS_OUTPUT DS(HS_CONSTANT_DATA_OUTPUT input,
     float3 localBitangent = normalize(patch[0].Bitangent * bary.x + patch[1].Bitangent * bary.y + patch[2].Bitangent * bary.z);
     float2 texC = patch[0].TexC * bary.x + patch[1].TexC * bary.y + patch[2].TexC * bary.z;
 
-    if (gHasDisplacementMap > 0.5f) {
-        float2 transformedTexC = mul(float4(texC, 0.0f, 1.0f), gTexTransform).xy;
-        float displacementHeight = gDisplacementMap.SampleLevel(gSampler, transformedTexC, 0).r;
-        localPos += localNormal * ((displacementHeight * 2.0f - 1.0f) * gDisplacementScale);
+     if (gWaveParams.x > 0.0f) { //немного поясню формулу для допа
+        float wavePhase = gWaveParams.w * gWaveParams.z;//фаза = время на скорость 
+        float waveSpatial = (localPos.x + localPos.z) * gWaveParams.y; //это пространственная координата. Волна распространяется в плоскости XZ
+        float waveOffset = sin(waveSpatial + wavePhase) * gWaveParams.x; //итоговое смещение вдоль нормали, умноженное на амплитуду.
+        localPos += localNormal * waveOffset;
     }
 
     float4 worldPos = mul(float4(localPos, 1.0f), gWorld);

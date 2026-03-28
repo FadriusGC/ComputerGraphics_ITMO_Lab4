@@ -267,11 +267,13 @@ void BoxApp::BuildBoxGeometry() {
     mSceneObjects.push_back(
         {0, static_cast<UINT>(mModelGeometry.Submeshes.size()),
          DirectX::SimpleMath::Matrix::Identity,
-         DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f)});
+         DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f),
+         DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f)});
   } else {
     auto appendGeometry =
         [&](const ModelGeometry& src, const DirectX::SimpleMath::Matrix& world,
-            const DirectX::SimpleMath::Vector4& tessellationParams) {
+            const DirectX::SimpleMath::Vector4& tessellationParams,
+            const DirectX::SimpleMath::Vector4& waveParams) {
           if (src.Vertices.empty() || src.Submeshes.empty()) {
             return;
           }
@@ -282,6 +284,7 @@ void BoxApp::BuildBoxGeometry() {
           object.SubmeshCount = static_cast<UINT>(src.Submeshes.size());
           object.World = world;
           object.TessellationParams = tessellationParams;
+          object.WaveParams = waveParams;
 
           const uint32_t vertexOffset =
               static_cast<uint32_t>(mModelGeometry.Vertices.size());
@@ -319,7 +322,8 @@ void BoxApp::BuildBoxGeometry() {
           sponzaGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
-          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f));
+          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f),
+          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
     }
 
     if (mountainLoaded) {
@@ -327,7 +331,8 @@ void BoxApp::BuildBoxGeometry() {
           mountainGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kMountainPosition),
-          DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f));
+          DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f),
+          DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
   }
 
@@ -930,6 +935,7 @@ void BoxApp::Update(const GameTimer& gt) {
   // Матрица мира
   const DirectX::SimpleMath::Vector4 cameraPosition(mCamPos.x, mCamPos.y,
                                                     mCamPos.z, 1.0f);
+  const float totalTime = gt.TotalTime();
   const DirectX::SimpleMath::Matrix viewProj = mView * mProj;
   for (size_t i = 0; i < mSceneObjects.size(); ++i) {
     ObjectConstants objConstants;
@@ -937,6 +943,8 @@ void BoxApp::Update(const GameTimer& gt) {
     objConstants.WorldViewProj = viewProj.Transpose();
     objConstants.CameraPosition = cameraPosition;
     objConstants.TessellationParams = mSceneObjects[i].TessellationParams;
+    objConstants.WaveParams = mSceneObjects[i].WaveParams;
+    objConstants.WaveParams.w = totalTime;
     mObjectCB->CopyData(static_cast<int>(i), objConstants);
   }
 
