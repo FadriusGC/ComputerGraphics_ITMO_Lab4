@@ -1,5 +1,7 @@
 #pragma once
-
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <SimpleMath.h>
 #include <comdef.h>  // для _com_error
 #include <d3d12.h>
@@ -7,6 +9,13 @@
 #include <dxgi1_6.h>
 #include <windows.h>
 #include <wrl.h>
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 
 #include <algorithm>
 #include <array>
@@ -25,7 +34,6 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
-
 
 #define ThrowIfFailed(x)                                                     \
   do {                                                                       \

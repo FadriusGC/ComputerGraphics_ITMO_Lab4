@@ -5,6 +5,13 @@
 #include <assimp/scene.h>
 #include <windows.h>
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 #include <algorithm>
 #include <assimp/Importer.hpp>
 #include <cfloat>

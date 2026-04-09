@@ -10,13 +10,17 @@
 #include "ShaderHelper.h"
 
 namespace {
+DirectX::SimpleMath::Vector3 ToVector3(const DirectX::XMFLOAT3& value) {
+  return DirectX::SimpleMath::Vector3(value.x, value.y, value.z);
+}
+
 DirectX::BoundingBox MergeBoundingBoxes(const DirectX::BoundingBox& a,
                                         const DirectX::BoundingBox& b) {
   DirectX::BoundingBox merged;
-  const DirectX::SimpleMath::Vector3 minA = a.Center - a.Extents;
-  const DirectX::SimpleMath::Vector3 maxA = a.Center + a.Extents;
-  const DirectX::SimpleMath::Vector3 minB = b.Center - b.Extents;
-  const DirectX::SimpleMath::Vector3 maxB = b.Center + b.Extents;
+  const auto minA = ToVector3(a.Center) - ToVector3(a.Extents);
+  const auto maxA = ToVector3(a.Center) + ToVector3(a.Extents);
+  const auto minB = ToVector3(b.Center) - ToVector3(b.Extents);
+  const auto maxB = ToVector3(b.Center) + ToVector3(b.Extents);
   const DirectX::SimpleMath::Vector3 minCorner(std::min(minA.x, minB.x),
                                                std::min(minA.y, minB.y),
                                                std::min(minA.z, minB.z));
@@ -30,14 +34,14 @@ DirectX::BoundingBox MergeBoundingBoxes(const DirectX::BoundingBox& a,
 DirectX::BoundingBox TransformBoundingBox(
     const DirectX::BoundingBox& localBounds,
     const DirectX::SimpleMath::Matrix& world) {
-  DirectX::SimpleMath::Vector3 corners[8];
+  DirectX::XMFLOAT3 corners[8];
   localBounds.GetCorners(corners);
 
   DirectX::SimpleMath::Vector3 minCorner(FLT_MAX, FLT_MAX, FLT_MAX);
   DirectX::SimpleMath::Vector3 maxCorner(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-  for (auto& corner : corners) {
-    const auto transformed =
-        DirectX::SimpleMath::Vector3::Transform(corner, world);
+  for (const auto& corner : corners) {
+    const auto transformed = DirectX::SimpleMath::Vector3::Transform(
+        DirectX::SimpleMath::Vector3(corner.x, corner.y, corner.z), world);
     minCorner.x = std::min(minCorner.x, transformed.x);
     minCorner.y = std::min(minCorner.y, transformed.y);
     minCorner.z = std::min(minCorner.z, transformed.z);
