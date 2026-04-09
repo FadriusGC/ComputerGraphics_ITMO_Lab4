@@ -28,6 +28,7 @@ class RenderingSystem {
               const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
               const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
               const ModelGeometry& modelGeometry,
+              const std::vector<UINT>& visibleObjectIndices,
               const std::vector<SceneObject>& sceneObjects,
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,

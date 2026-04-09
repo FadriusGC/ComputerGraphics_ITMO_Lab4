@@ -198,6 +198,7 @@ void RenderingSystem::Render(
     const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     const ModelGeometry& modelGeometry,
     const std::vector<SceneObject>& sceneObjects,
+    const std::vector<UINT>& visibleObjectIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
     D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress) {
   cmdList->RSSetViewports(1, &viewport);
@@ -234,8 +235,10 @@ void RenderingSystem::Render(
     cmdList->SetGraphicsRootDescriptorTable(4, defaultTextureHandle);
   }
 
-  for (size_t objectIndex = 0; objectIndex < sceneObjects.size();
-       ++objectIndex) {
+  for (UINT objectIndex : visibleObjectIndices) {
+    if (objectIndex >= sceneObjects.size()) {
+      continue;
+    }
     CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
         cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
         static_cast<INT>(objectIndex), cbvSrvDescriptorSize);
