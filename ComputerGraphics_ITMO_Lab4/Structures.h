@@ -52,6 +52,13 @@ struct SceneObject {
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 };
 
+struct SubmeshInstance {
+  UINT ObjectIndex = 0;
+  UINT SubmeshIndex = 0;
+  DirectX::BoundingBox LocalBounds;
+  DirectX::BoundingBox WorldBounds;
+};
+
 struct LightConstants {
   DirectX::SimpleMath::Vector4 LightPosition;
   DirectX::SimpleMath::Vector4 LightColor;

@@ -176,16 +176,17 @@ class BoxApp {
     DirectX::BoundingBox Bounds;
     UINT LeftChild = UINT_MAX;
     UINT RightChild = UINT_MAX;
-    UINT StartObject = 0;
-    UINT ObjectCount = 0;
+    UINT StartPrimitive = 0;
+    UINT PrimitiveCount = 0;
 
     bool IsLeaf() const {
       return LeftChild == UINT_MAX && RightChild == UINT_MAX;
     }
   };
   std::vector<BvhNode> mBvhNodes;
-  std::vector<UINT> mBvhObjectIndices;
-  std::vector<UINT> mVisibleObjectIndices;
+  std::vector<UINT> mBvhSubmeshInstanceIndices;
+  std::vector<UINT> mVisibleSubmeshInstanceIndices;
+  std::vector<SubmeshInstance> mSubmeshInstances;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;

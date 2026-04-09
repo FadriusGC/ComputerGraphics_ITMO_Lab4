@@ -541,11 +541,29 @@ void BoxApp::BuildBoxGeometry() {
   for (UINT i = 0; i < numMaterials; ++i) {
     mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
   }
+  mSubmeshInstances.clear();
+  mSubmeshInstances.reserve(mModelGeometry.Submeshes.size());
+  for (UINT objectIndex = 0;
+       objectIndex < static_cast<UINT>(mSceneObjects.size()); ++objectIndex) {
+    const SceneObject& object = mSceneObjects[objectIndex];
+    const UINT submeshEnd = object.SubmeshStart + object.SubmeshCount;
+    for (UINT submeshIndex = object.SubmeshStart; submeshIndex < submeshEnd;
+         ++submeshIndex) {
+      SubmeshInstance instance;
+      instance.ObjectIndex = objectIndex;
+      instance.SubmeshIndex = submeshIndex;
+      instance.LocalBounds = mModelGeometry.Submeshes[submeshIndex].Bounds;
+      instance.WorldBounds =
+          TransformBoundingBox(instance.LocalBounds, object.World);
+      mSubmeshInstances.push_back(instance);
+    }
+  }
 
   UpdateSceneObjectBounds();
   BuildSceneAccelerationStructure();
-  mVisibleObjectIndices.resize(mSceneObjects.size());
-  std::iota(mVisibleObjectIndices.begin(), mVisibleObjectIndices.end(), 0);
+  mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+  std::iota(mVisibleSubmeshInstanceIndices.begin(),
+            mVisibleSubmeshInstanceIndices.end(), 0);
 }
 
 void BoxApp::CreateFallbackCube() {
@@ -993,26 +1011,37 @@ void BoxApp::UpdateSceneObjectBounds() {
   for (auto& object : mSceneObjects) {
     object.WorldBounds = TransformBoundingBox(object.LocalBounds, object.World);
   }
+  for (auto& submeshInstance : mSubmeshInstances) {
+    const auto objectIndex = submeshInstance.ObjectIndex;
+    if (objectIndex >= mSceneObjects.size()) {
+      continue;
+    }
+    submeshInstance.WorldBounds = TransformBoundingBox(
+        submeshInstance.LocalBounds, mSceneObjects[objectIndex].World);
+  }
 }
 
 void BoxApp::BuildSceneAccelerationStructure() {
   mBvhNodes.clear();
-  mBvhObjectIndices.resize(mSceneObjects.size());
-  std::iota(mBvhObjectIndices.begin(), mBvhObjectIndices.end(), 0);
+  mBvhSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+  std::iota(mBvhSubmeshInstanceIndices.begin(),
+            mBvhSubmeshInstanceIndices.end(), 0);
 
-  if (mBvhObjectIndices.empty()) {
+  if (mBvhSubmeshInstanceIndices.empty()) {
     return;
   }
 
   std::function<UINT(UINT, UINT)> buildNode = [&](UINT start,
                                                   UINT count) -> UINT {
     BvhNode node;
-    node.StartObject = start;
-    node.ObjectCount = count;
-    node.Bounds = mSceneObjects[mBvhObjectIndices[start]].WorldBounds;
+    node.StartPrimitive = start;
+    node.PrimitiveCount = count;
+    node.Bounds =
+        mSubmeshInstances[mBvhSubmeshInstanceIndices[start]].WorldBounds;
     for (UINT i = 1; i < count; ++i) {
       node.Bounds = MergeBoundingBoxes(
-          node.Bounds, mSceneObjects[mBvhObjectIndices[start + i]].WorldBounds);
+          node.Bounds,
+          mSubmeshInstances[mBvhSubmeshInstanceIndices[start + i]].WorldBounds);
     }
 
     const UINT nodeIndex = static_cast<UINT>(mBvhNodes.size());
@@ -1027,7 +1056,7 @@ void BoxApp::BuildSceneAccelerationStructure() {
     DirectX::SimpleMath::Vector3 centroidMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     for (UINT i = 0; i < count; ++i) {
       const auto& bounds =
-          mSceneObjects[mBvhObjectIndices[start + i]].WorldBounds;
+          mSubmeshInstances[mBvhSubmeshInstanceIndices[start + i]].WorldBounds;
       const auto& center = bounds.Center;
       centroidMin.x = std::min(centroidMin.x, center.x);
       centroidMin.y = std::min(centroidMin.y, center.y);
@@ -1045,8 +1074,8 @@ void BoxApp::BuildSceneAccelerationStructure() {
       splitAxis = 2;
     }
 
-    auto axisValue = [&](UINT objectIndex) {
-      const auto& center = mSceneObjects[objectIndex].WorldBounds.Center;
+    auto axisValue = [&](UINT primitiveIndex) {
+      const auto& center = mSubmeshInstances[primitiveIndex].WorldBounds.Center;
       if (splitAxis == 1) return center.y;
       if (splitAxis == 2) return center.z;
       return center.x;
@@ -1054,25 +1083,27 @@ void BoxApp::BuildSceneAccelerationStructure() {
 
     UINT mid = start + count / 2;
     std::nth_element(
-        mBvhObjectIndices.begin() + start, mBvhObjectIndices.begin() + mid,
-        mBvhObjectIndices.begin() + start + count,
+        mBvhSubmeshInstanceIndices.begin() + start,
+        mBvhSubmeshInstanceIndices.begin() + mid,
+        mBvhSubmeshInstanceIndices.begin() + start + count,
         [&](UINT lhs, UINT rhs) { return axisValue(lhs) < axisValue(rhs); });
 
     mBvhNodes[nodeIndex].LeftChild = buildNode(start, mid - start);
     mBvhNodes[nodeIndex].RightChild = buildNode(mid, start + count - mid);
-    mBvhNodes[nodeIndex].ObjectCount = 0;
+    mBvhNodes[nodeIndex].PrimitiveCount = 0;
     return nodeIndex;
   };
 
-  buildNode(0, static_cast<UINT>(mBvhObjectIndices.size()));
+  buildNode(0, static_cast<UINT>(mBvhSubmeshInstanceIndices.size()));
 }
 
 void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
-  mVisibleObjectIndices.clear();
+  mVisibleSubmeshInstanceIndices.clear();
 
   if (mBvhNodes.empty()) {
-    mVisibleObjectIndices.resize(mSceneObjects.size());
-    std::iota(mVisibleObjectIndices.begin(), mVisibleObjectIndices.end(), 0);
+    mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+    std::iota(mVisibleSubmeshInstanceIndices.begin(),
+              mVisibleSubmeshInstanceIndices.end(), 0);
     return;
   }
 
@@ -1094,11 +1125,12 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
     }
 
     if (node.IsLeaf()) {
-      for (UINT i = 0; i < node.ObjectCount; ++i) {
-        const UINT objectIndex = mBvhObjectIndices[node.StartObject + i];
+      for (UINT i = 0; i < node.PrimitiveCount; ++i) {
+        const UINT primitiveIndex =
+            mBvhSubmeshInstanceIndices[node.StartPrimitive + i];
         if (nodeFullyVisible ||
-            frustum.Intersects(mSceneObjects[objectIndex].WorldBounds)) {
-          mVisibleObjectIndices.push_back(objectIndex);
+            frustum.Intersects(mSubmeshInstances[primitiveIndex].WorldBounds)) {
+          mVisibleSubmeshInstanceIndices.push_back(primitiveIndex);
         }
       }
       continue;
@@ -1111,9 +1143,10 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
       stack.emplace_back(node.LeftChild, nodeFullyVisible);
     }
   }
-  /*if (mVisibleObjectIndices.empty() && !mSceneObjects.empty()) {
-    mVisibleObjectIndices.resize(mSceneObjects.size());
-    std::iota(mVisibleObjectIndices.begin(), mVisibleObjectIndices.end(), 0);
+  /*/*if (mVisibleSubmeshInstanceIndices.empty() && !mSubmeshInstances.empty())
+  { mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+    std::iota(mVisibleSubmeshInstanceIndices.begin(),
+              mVisibleSubmeshInstanceIndices.end(), 0);
   }*/
 }
 
@@ -1293,14 +1326,15 @@ void BoxApp::Update(const GameTimer& gt) {
 void BoxApp::Draw(const GameTimer& gt) {
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
-  mRenderingSystem.Render(
-      mCommandList.Get(), CurrentBackBufferView(),
-      mSwapChainBuffers[mCurrBackBuffer].Get(), DepthStencilView(),
-      mCbvHeap.Get(), mSamplerHeap.Get(), mCbvSrvDescriptorSize,
-      mScreenViewport, mScissorRect, mVertexBufferView, mIndexBufferView,
-      mModelGeometry, mSceneObjects, mVisibleObjectIndices, mMaterialCB.get(),
-      mDepthStencilBuffer.Get(),
-      mComposeCB->Resource()->GetGPUVirtualAddress());
+  mRenderingSystem.Render(mCommandList.Get(), CurrentBackBufferView(),
+                          mSwapChainBuffers[mCurrBackBuffer].Get(),
+                          DepthStencilView(), mCbvHeap.Get(),
+                          mSamplerHeap.Get(), mCbvSrvDescriptorSize,
+                          mScreenViewport, mScissorRect, mVertexBufferView,
+                          mIndexBufferView, mModelGeometry, mSceneObjects,
+                          mSubmeshInstances, mVisibleSubmeshInstanceIndices,
+                          mMaterialCB.get(), mDepthStencilBuffer.Get(),
+                          mComposeCB->Resource()->GetGPUVirtualAddress());
 
   ThrowIfFailed(mCommandList->Close());
 

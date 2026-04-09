@@ -29,7 +29,8 @@ class RenderingSystem {
               const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
               const ModelGeometry& modelGeometry,
               const std::vector<SceneObject>& sceneObjects,
-              const std::vector<UINT>& visibleObjectIndices,
+              const std::vector<SubmeshInstance>& submeshInstances,
+              const std::vector<UINT>& visibleSubmeshInstanceIndices,
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,
               D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress);
