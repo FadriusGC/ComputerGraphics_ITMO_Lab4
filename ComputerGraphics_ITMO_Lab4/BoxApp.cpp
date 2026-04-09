@@ -3,6 +3,7 @@
 
 #include <cfloat>
 #include <numeric>
+#include <utility>
 
 #include "DDSTextureLoader.h"
 #include "Material.h"
@@ -154,7 +155,7 @@ bool BoxApp::Initialize() {
 void BoxApp::OnResize() {
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
-      static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
+      static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 10000.0f);
 }
 
 void BoxApp::ResetFallingLight(FallingPointLight& light) {
@@ -1075,23 +1076,29 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
     return;
   }
 
-  std::vector<UINT> stack;
-  stack.push_back(0);
+  std::vector<std::pair<UINT, bool>> stack;
+  stack.emplace_back(0, false);
   while (!stack.empty()) {
-    const UINT nodeIndex = stack.back();
+    const UINT nodeIndex = stack.back().first;
+    const bool inheritedFullyVisible = stack.back().second;
     stack.pop_back();
 
     const auto& node = mBvhNodes[nodeIndex];
-    const auto intersection = frustum.Contains(node.Bounds);
-    if (intersection == DirectX::DISJOINT) {
-      continue;
+    bool nodeFullyVisible = inheritedFullyVisible;
+    if (!inheritedFullyVisible) {
+      const auto intersection = frustum.Contains(node.Bounds);
+      if (intersection == DirectX::DISJOINT) {
+        continue;
+      }
+      nodeFullyVisible = (intersection == DirectX::CONTAINS);
     }
 
     if (node.IsLeaf()) {
       for (UINT i = 0; i < node.ObjectCount; ++i) {
         const UINT objectIndex = mBvhObjectIndices[node.StartObject + i];
-        if (frustum.Contains(mSceneObjects[objectIndex].WorldBounds) !=
-            DirectX::DISJOINT) {
+        if (nodeFullyVisible ||
+            frustum.Contains(mSceneObjects[objectIndex].WorldBounds) !=
+                DirectX::DISJOINT) {
           mVisibleObjectIndices.push_back(objectIndex);
         }
       }
@@ -1099,12 +1106,16 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
     }
 
     if (node.RightChild != UINT_MAX) {
-      stack.push_back(node.RightChild);
+      stack.emplace_back(node.RightChild, nodeFullyVisible);
     }
     if (node.LeftChild != UINT_MAX) {
-      stack.push_back(node.LeftChild);
+      stack.emplace_back(node.LeftChild, nodeFullyVisible);
     }
   }
+  /*if (mVisibleObjectIndices.empty() && !mSceneObjects.empty()) {
+    mVisibleObjectIndices.resize(mSceneObjects.size());
+    std::iota(mVisibleObjectIndices.begin(), mVisibleObjectIndices.end(), 0);
+  }*/
 }
 
 void BoxApp::Update(const GameTimer& gt) {
@@ -1150,10 +1161,11 @@ void BoxApp::Update(const GameTimer& gt) {
   UpdateSceneObjectBounds();
   BuildSceneAccelerationStructure();
 
-  DirectX::BoundingFrustum cameraFrustum;
-  DirectX::BoundingFrustum::CreateFromMatrix(cameraFrustum, mProj);
+  DirectX::BoundingFrustum viewSpaceFrustum;
+  DirectX::BoundingFrustum::CreateFromMatrix(viewSpaceFrustum, mProj);
   const DirectX::SimpleMath::Matrix invView = mView.Invert();
-  cameraFrustum.Transform(cameraFrustum, invView);
+  DirectX::BoundingFrustum cameraFrustum;
+  viewSpaceFrustum.Transform(cameraFrustum, invView);
   CollectVisibleObjects(cameraFrustum);
 
   for (size_t i = 0; i < mSceneObjects.size(); ++i) {
