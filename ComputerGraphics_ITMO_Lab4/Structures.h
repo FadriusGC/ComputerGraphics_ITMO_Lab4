@@ -34,6 +34,8 @@ struct ObjectConstants {
   DirectX::SimpleMath::Matrix WorldViewProj;
   DirectX::SimpleMath::Vector4 CameraPosition;
   DirectX::SimpleMath::Vector4 TessellationParams;
+  DirectX::SimpleMath::Vector4 WaveParams;  // первый аргумент это ампилтуда,
+                                            // второе частота, третье скорость
 };
 
 struct SceneObject {
@@ -42,6 +44,8 @@ struct SceneObject {
   DirectX::SimpleMath::Matrix World = DirectX::SimpleMath::Matrix::Identity;
   DirectX::SimpleMath::Vector4 TessellationParams =
       DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
+  DirectX::SimpleMath::Vector4 WaveParams =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 };
 
 struct LightConstants {
