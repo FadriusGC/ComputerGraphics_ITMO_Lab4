@@ -1100,7 +1100,7 @@ void BoxApp::BuildSceneAccelerationStructure() {
 void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
   mVisibleSubmeshInstanceIndices.clear();
 
-  if (mBvhNodes.empty()) {
+  if (!mFrustumCullingEnabled || mBvhNodes.empty()) {
     mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
     std::iota(mVisibleSubmeshInstanceIndices.begin(),
               mVisibleSubmeshInstanceIndices.end(), 0);
@@ -1151,6 +1151,11 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
 }
 
 void BoxApp::Update(const GameTimer& gt) {
+  const bool isToggleKeyDown = (GetAsyncKeyState('C') & 0x8000) != 0;
+  if (isToggleKeyDown && !mFrustumCullingToggleKeyWasDown) {
+    mFrustumCullingEnabled = !mFrustumCullingEnabled;
+  }
+  mFrustumCullingToggleKeyWasDown = isToggleKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),

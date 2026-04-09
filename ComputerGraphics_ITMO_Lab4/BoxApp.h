@@ -187,6 +187,8 @@ class BoxApp {
   std::vector<UINT> mBvhSubmeshInstanceIndices;
   std::vector<UINT> mVisibleSubmeshInstanceIndices;
   std::vector<SubmeshInstance> mSubmeshInstances;
+  bool mFrustumCullingEnabled = true;
+  bool mFrustumCullingToggleKeyWasDown = false;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;
