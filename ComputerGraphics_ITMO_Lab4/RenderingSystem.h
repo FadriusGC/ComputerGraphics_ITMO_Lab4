@@ -11,8 +11,11 @@ class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
   static constexpr UINT kGBufferSrvStart = 2;
-  static constexpr UINT kTextureSrvStart = 5;
-  static constexpr UINT kDepthSrvIndex = 4;
+  static constexpr UINT kObjectCbvStart = 5;
+  static constexpr UINT kObjectCbvReservedCount = 128;
+  static constexpr UINT kDepthSrvIndex =
+      kObjectCbvStart + kObjectCbvReservedCount;
+  static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,

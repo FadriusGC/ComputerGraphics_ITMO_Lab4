@@ -187,7 +187,7 @@ void BoxApp::BuildDescriptorHeaps() {
 
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
   cbvHeapDesc.NumDescriptors =
-      128;  // достаточно для object CBV, light CBV и множества текстур
+      512;  // достаточно для object CBV, light CBV и множества текстур
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -279,6 +279,18 @@ void BoxApp::BuildShadersAndInputLayout() {
 void BoxApp::BuildBoxGeometry() {
   const float kSponzaScale = 0.08f;
   const DirectX::SimpleMath::Vector3 kSponzaPosition(-120.0f, 0.0f, 0.0f);
+  const float kSponzaInstanceScale = 0.02f;
+  const std::array<DirectX::SimpleMath::Vector3, 10> kSponzaInstancePositions =
+      {DirectX::SimpleMath::Vector3(-210.0f, 0.0f, -140.0f),
+       DirectX::SimpleMath::Vector3(-180.0f, 0.0f, -40.0f),
+       DirectX::SimpleMath::Vector3(-150.0f, 0.0f, 70.0f),
+       DirectX::SimpleMath::Vector3(-95.0f, 0.0f, 150.0f),
+       DirectX::SimpleMath::Vector3(-30.0f, 0.0f, -125.0f),
+       DirectX::SimpleMath::Vector3(15.0f, 0.0f, -35.0f),
+       DirectX::SimpleMath::Vector3(55.0f, 0.0f, 55.0f),
+       DirectX::SimpleMath::Vector3(95.0f, 0.0f, 130.0f),
+       DirectX::SimpleMath::Vector3(145.0f, 0.0f, -90.0f),
+       DirectX::SimpleMath::Vector3(175.0f, 0.0f, 35.0f)};
 
   const float kMountainScale = 100.0f;
   const DirectX::SimpleMath::Vector3 kMountainPosition(140.0f, -10.0f, 30.0f);
@@ -386,12 +398,32 @@ void BoxApp::BuildBoxGeometry() {
         };
 
     if (sponzaLoaded) {
+      const UINT sponzaObjectIndex = static_cast<UINT>(mSceneObjects.size());
+      const auto sponzaTessellationParams =
+          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f);
+      const auto sponzaWaveParams =
+          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+
       appendGeometry(
           sponzaGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
-          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f),
-          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
+          sponzaTessellationParams, sponzaWaveParams);
+
+      if (sponzaObjectIndex < static_cast<UINT>(mSceneObjects.size())) {
+        SceneObject baseSponzaObject = mSceneObjects[sponzaObjectIndex];
+        mSceneObjects.reserve(mSceneObjects.size() +
+                              kSponzaInstancePositions.size());
+        for (const auto& instancePosition : kSponzaInstancePositions) {
+          SceneObject sponzaInstance = baseSponzaObject;
+          sponzaInstance.World =
+              DirectX::SimpleMath::Matrix::CreateScale(kSponzaInstanceScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(instancePosition);
+          sponzaInstance.WorldBounds = TransformBoundingBox(
+              sponzaInstance.LocalBounds, sponzaInstance.World);
+          mSceneObjects.push_back(sponzaInstance);
+        }
+      }
     }
 
     if (mountainLoaded) {
@@ -443,7 +475,8 @@ void BoxApp::BuildBoxGeometry() {
         static_cast<UINT64>(i) * cbvDescSize;
     cbvDescObject.SizeInBytes = cbvDescSize;
     CD3DX12_CPU_DESCRIPTOR_HANDLE objectCbvHandle(
-        mCbvHeap->GetCPUDescriptorHandleForHeapStart(), static_cast<INT>(i),
+        mCbvHeap->GetCPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(RenderingSystem::kObjectCbvStart + i),
         mCbvSrvDescriptorSize);
     mDevice->CreateConstantBufferView(&cbvDescObject, objectCbvHandle);
   }

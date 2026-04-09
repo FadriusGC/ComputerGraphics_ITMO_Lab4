@@ -252,7 +252,7 @@ void RenderingSystem::Render(
 
     CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
         cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-        static_cast<INT>(objectIndex), cbvSrvDescriptorSize);
+        static_cast<INT>(kObjectCbvStart + objectIndex), cbvSrvDescriptorSize);
     cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
 
     const auto& submesh = modelGeometry.Submeshes[submeshIndex];
