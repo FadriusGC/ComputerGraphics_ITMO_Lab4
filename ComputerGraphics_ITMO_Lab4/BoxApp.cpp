@@ -155,7 +155,7 @@ bool BoxApp::Initialize() {
 void BoxApp::OnResize() {
   mProj = DirectX::SimpleMath::Matrix::CreatePerspectiveFieldOfView(
       0.25f * DirectX::XM_PI,
-      static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 10000.0f);
+      static_cast<float>(WIDTH) / static_cast<float>(HEIGHT), 0.1f, 1000.0f);
 }
 
 void BoxApp::ResetFallingLight(FallingPointLight& light) {
@@ -1086,10 +1086,10 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
     const auto& node = mBvhNodes[nodeIndex];
     bool nodeFullyVisible = inheritedFullyVisible;
     if (!inheritedFullyVisible) {
-      const auto intersection = frustum.Contains(node.Bounds);
-      if (intersection == DirectX::DISJOINT) {
+      if (!frustum.Intersects(node.Bounds)) {
         continue;
       }
+      const auto intersection = frustum.Contains(node.Bounds);
       nodeFullyVisible = (intersection == DirectX::CONTAINS);
     }
 
@@ -1097,8 +1097,7 @@ void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
       for (UINT i = 0; i < node.ObjectCount; ++i) {
         const UINT objectIndex = mBvhObjectIndices[node.StartObject + i];
         if (nodeFullyVisible ||
-            frustum.Contains(mSceneObjects[objectIndex].WorldBounds) !=
-                DirectX::DISJOINT) {
+            frustum.Intersects(mSceneObjects[objectIndex].WorldBounds)) {
           mVisibleObjectIndices.push_back(objectIndex);
         }
       }
@@ -1162,7 +1161,7 @@ void BoxApp::Update(const GameTimer& gt) {
   BuildSceneAccelerationStructure();
 
   DirectX::BoundingFrustum viewSpaceFrustum;
-  DirectX::BoundingFrustum::CreateFromMatrix(viewSpaceFrustum, mProj);
+  DirectX::BoundingFrustum::CreateFromMatrix(viewSpaceFrustum, mProj, true);
   const DirectX::SimpleMath::Matrix invView = mView.Invert();
   DirectX::BoundingFrustum cameraFrustum;
   viewSpaceFrustum.Transform(cameraFrustum, invView);
