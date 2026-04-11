@@ -1,5 +1,6 @@
 #pragma once
 
+#include <DirectXCollision.h>
 #include <SimpleMath.h>
 
 #include <cstdint>
@@ -20,6 +21,7 @@ struct Submesh {
   UINT MaterialIndex = 0;       // индекс в списке материалов
   UINT IndexCount = 0;          // количество индексов в этой сабмеши
   UINT StartIndexLocation = 0;  // смещение в общем буфере индексов
+  DirectX::BoundingBox Bounds;
 };
 
 struct ModelGeometry {
@@ -42,10 +44,19 @@ struct SceneObject {
   UINT SubmeshStart = 0;
   UINT SubmeshCount = 0;
   DirectX::SimpleMath::Matrix World = DirectX::SimpleMath::Matrix::Identity;
+  DirectX::BoundingBox LocalBounds;
+  DirectX::BoundingBox WorldBounds;
   DirectX::SimpleMath::Vector4 TessellationParams =
       DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
   DirectX::SimpleMath::Vector4 WaveParams =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+};
+
+struct SubmeshInstance {
+  UINT ObjectIndex = 0;
+  UINT SubmeshIndex = 0;
+  DirectX::BoundingBox LocalBounds;
+  DirectX::BoundingBox WorldBounds;
 };
 
 struct LightConstants {

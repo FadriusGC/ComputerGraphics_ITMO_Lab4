@@ -5,7 +5,16 @@
 #include <assimp/scene.h>
 #include <windows.h>
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+#include <algorithm>
 #include <assimp/Importer.hpp>
+#include <cfloat>
 
 using namespace DirectX;
 
@@ -128,7 +137,8 @@ bool ModelLoader::LoadModel(const std::string& filePath,
     Submesh submesh;
     submesh.MaterialIndex = mesh->mMaterialIndex;
     submesh.StartIndexLocation = totalIndices;
-
+    DirectX::XMFLOAT3 meshMin(FLT_MAX, FLT_MAX, FLT_MAX);
+    DirectX::XMFLOAT3 meshMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     // Вершины
     for (unsigned int vertIdx = 0; vertIdx < mesh->mNumVertices; ++vertIdx) {
       Vertex vertex;
@@ -136,6 +146,12 @@ bool ModelLoader::LoadModel(const std::string& filePath,
       vertex.Pos.x = mesh->mVertices[vertIdx].x;
       vertex.Pos.y = mesh->mVertices[vertIdx].y;
       vertex.Pos.z = mesh->mVertices[vertIdx].z;
+      meshMin.x = std::min(meshMin.x, vertex.Pos.x);
+      meshMin.y = std::min(meshMin.y, vertex.Pos.y);
+      meshMin.z = std::min(meshMin.z, vertex.Pos.z);
+      meshMax.x = std::max(meshMax.x, vertex.Pos.x);
+      meshMax.y = std::max(meshMax.y, vertex.Pos.y);
+      meshMax.z = std::max(meshMax.z, vertex.Pos.z);
 
       if (mesh->HasNormals()) {
         vertex.Normal.x = mesh->mNormals[vertIdx].x;
@@ -180,6 +196,9 @@ bool ModelLoader::LoadModel(const std::string& filePath,
     }
 
     submesh.IndexCount = mesh->mNumFaces * 3;  // после триангуляции
+    DirectX::BoundingBox::CreateFromPoints(submesh.Bounds,
+                                           DirectX::XMLoadFloat3(&meshMin),
+                                           DirectX::XMLoadFloat3(&meshMax));
     outModelGeometry.Submeshes.push_back(submesh);
 
     totalVertices += mesh->mNumVertices;

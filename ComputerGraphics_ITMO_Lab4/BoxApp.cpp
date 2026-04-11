@@ -1,10 +1,61 @@
 ﻿#define NOMINMAX
 #include "BoxApp.h"
 
+#include <cfloat>
+#include <numeric>
+#include <utility>
+
 #include "DDSTextureLoader.h"
 #include "Material.h"
 #include "ModelLoader.h"
 #include "ShaderHelper.h"
+
+namespace {
+DirectX::SimpleMath::Vector3 ToVector3(const DirectX::XMFLOAT3& value) {
+  return DirectX::SimpleMath::Vector3(value.x, value.y, value.z);
+}
+
+DirectX::BoundingBox MergeBoundingBoxes(const DirectX::BoundingBox& a,
+                                        const DirectX::BoundingBox& b) {
+  DirectX::BoundingBox merged;
+  const auto minA = ToVector3(a.Center) - ToVector3(a.Extents);
+  const auto maxA = ToVector3(a.Center) + ToVector3(a.Extents);
+  const auto minB = ToVector3(b.Center) - ToVector3(b.Extents);
+  const auto maxB = ToVector3(b.Center) + ToVector3(b.Extents);
+  const DirectX::SimpleMath::Vector3 minCorner(std::min(minA.x, minB.x),
+                                               std::min(minA.y, minB.y),
+                                               std::min(minA.z, minB.z));
+  const DirectX::SimpleMath::Vector3 maxCorner(std::max(maxA.x, maxB.x),
+                                               std::max(maxA.y, maxB.y),
+                                               std::max(maxA.z, maxB.z));
+  DirectX::BoundingBox::CreateFromPoints(merged, minCorner, maxCorner);
+  return merged;
+}
+
+DirectX::BoundingBox TransformBoundingBox(
+    const DirectX::BoundingBox& localBounds,
+    const DirectX::SimpleMath::Matrix& world) {
+  DirectX::XMFLOAT3 corners[8];
+  localBounds.GetCorners(corners);
+
+  DirectX::SimpleMath::Vector3 minCorner(FLT_MAX, FLT_MAX, FLT_MAX);
+  DirectX::SimpleMath::Vector3 maxCorner(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+  for (const auto& corner : corners) {
+    const auto transformed = DirectX::SimpleMath::Vector3::Transform(
+        DirectX::SimpleMath::Vector3(corner.x, corner.y, corner.z), world);
+    minCorner.x = std::min(minCorner.x, transformed.x);
+    minCorner.y = std::min(minCorner.y, transformed.y);
+    minCorner.z = std::min(minCorner.z, transformed.z);
+    maxCorner.x = std::max(maxCorner.x, transformed.x);
+    maxCorner.y = std::max(maxCorner.y, transformed.y);
+    maxCorner.z = std::max(maxCorner.z, transformed.z);
+  }
+
+  DirectX::BoundingBox worldBounds;
+  DirectX::BoundingBox::CreateFromPoints(worldBounds, minCorner, maxCorner);
+  return worldBounds;
+}
+}  // namespace
 
 BoxApp::BoxApp(HINSTANCE hInstance)
     : m_window(),
@@ -136,7 +187,7 @@ void BoxApp::BuildDescriptorHeaps() {
 
   D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
   cbvHeapDesc.NumDescriptors =
-      128;  // достаточно для object CBV, light CBV и множества текстур
+      512;  // достаточно для object CBV, light CBV и множества текстур
   cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(
@@ -228,6 +279,18 @@ void BoxApp::BuildShadersAndInputLayout() {
 void BoxApp::BuildBoxGeometry() {
   const float kSponzaScale = 0.08f;
   const DirectX::SimpleMath::Vector3 kSponzaPosition(-120.0f, 0.0f, 0.0f);
+  const float kSponzaInstanceScale = 0.02f;
+  const std::array<DirectX::SimpleMath::Vector3, 10> kSponzaInstancePositions =
+      {DirectX::SimpleMath::Vector3(-210.0f, 0.0f, -140.0f),
+       DirectX::SimpleMath::Vector3(-180.0f, 0.0f, -40.0f),
+       DirectX::SimpleMath::Vector3(-150.0f, 0.0f, 70.0f),
+       DirectX::SimpleMath::Vector3(-95.0f, 0.0f, 150.0f),
+       DirectX::SimpleMath::Vector3(-30.0f, 0.0f, -125.0f),
+       DirectX::SimpleMath::Vector3(15.0f, 0.0f, -35.0f),
+       DirectX::SimpleMath::Vector3(55.0f, 0.0f, 55.0f),
+       DirectX::SimpleMath::Vector3(95.0f, 0.0f, 130.0f),
+       DirectX::SimpleMath::Vector3(145.0f, 0.0f, -90.0f),
+       DirectX::SimpleMath::Vector3(175.0f, 0.0f, 35.0f)};
 
   const float kMountainScale = 100.0f;
   const DirectX::SimpleMath::Vector3 kMountainPosition(140.0f, -10.0f, 30.0f);
@@ -264,11 +327,16 @@ void BoxApp::BuildBoxGeometry() {
     MessageBoxA(nullptr, "Failed to load both models. Using fallback cube.",
                 "Warning", MB_OK);
     CreateFallbackCube();
-    mSceneObjects.push_back(
-        {0, static_cast<UINT>(mModelGeometry.Submeshes.size()),
-         DirectX::SimpleMath::Matrix::Identity,
-         DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f),
-         DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f)});
+    SceneObject fallbackObject;
+    fallbackObject.SubmeshStart = 0;
+    fallbackObject.SubmeshCount =
+        static_cast<UINT>(mModelGeometry.Submeshes.size());
+    fallbackObject.World = DirectX::SimpleMath::Matrix::Identity;
+    fallbackObject.TessellationParams =
+        DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
+    fallbackObject.WaveParams =
+        DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+    mSceneObjects.push_back(fallbackObject);
   } else {
     auto appendGeometry =
         [&](const ModelGeometry& src, const DirectX::SimpleMath::Matrix& world,
@@ -313,17 +381,49 @@ void BoxApp::BuildBoxGeometry() {
             copied.MaterialIndex += materialOffset;
             mModelGeometry.Submeshes.push_back(copied);
           }
-
+          DirectX::BoundingBox localBounds;
+          bool hasBounds = false;
+          const UINT submeshEnd = object.SubmeshStart + object.SubmeshCount;
+          for (UINT submeshIndex = object.SubmeshStart;
+               submeshIndex < submeshEnd; ++submeshIndex) {
+            const auto& bounds = mModelGeometry.Submeshes[submeshIndex].Bounds;
+            localBounds =
+                hasBounds ? MergeBoundingBoxes(localBounds, bounds) : bounds;
+            hasBounds = true;
+          }
+          object.LocalBounds = localBounds;
+          object.WorldBounds =
+              TransformBoundingBox(object.LocalBounds, object.World);
           mSceneObjects.push_back(object);
         };
 
     if (sponzaLoaded) {
+      const UINT sponzaObjectIndex = static_cast<UINT>(mSceneObjects.size());
+      const auto sponzaTessellationParams =
+          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f);
+      const auto sponzaWaveParams =
+          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+
       appendGeometry(
           sponzaGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
-          DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f),
-          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
+          sponzaTessellationParams, sponzaWaveParams);
+
+      if (sponzaObjectIndex < static_cast<UINT>(mSceneObjects.size())) {
+        SceneObject baseSponzaObject = mSceneObjects[sponzaObjectIndex];
+        mSceneObjects.reserve(mSceneObjects.size() +
+                              kSponzaInstancePositions.size());
+        for (const auto& instancePosition : kSponzaInstancePositions) {
+          SceneObject sponzaInstance = baseSponzaObject;
+          sponzaInstance.World =
+              DirectX::SimpleMath::Matrix::CreateScale(kSponzaInstanceScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(instancePosition);
+          sponzaInstance.WorldBounds = TransformBoundingBox(
+              sponzaInstance.LocalBounds, sponzaInstance.World);
+          mSceneObjects.push_back(sponzaInstance);
+        }
+      }
     }
 
     if (mountainLoaded) {
@@ -334,6 +434,21 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f),
           DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
+  }
+
+  for (auto& object : mSceneObjects) {
+    bool hasBounds = false;
+    DirectX::BoundingBox localBounds;
+    const UINT submeshEnd = object.SubmeshStart + object.SubmeshCount;
+    for (UINT submeshIndex = object.SubmeshStart; submeshIndex < submeshEnd;
+         ++submeshIndex) {
+      const auto& bounds = mModelGeometry.Submeshes[submeshIndex].Bounds;
+      localBounds =
+          hasBounds ? MergeBoundingBoxes(localBounds, bounds) : bounds;
+      hasBounds = true;
+    }
+    object.LocalBounds = localBounds;
+    object.WorldBounds = TransformBoundingBox(object.LocalBounds, object.World);
   }
 
   if (mModelGeometry.Materials.empty()) {
@@ -360,7 +475,8 @@ void BoxApp::BuildBoxGeometry() {
         static_cast<UINT64>(i) * cbvDescSize;
     cbvDescObject.SizeInBytes = cbvDescSize;
     CD3DX12_CPU_DESCRIPTOR_HANDLE objectCbvHandle(
-        mCbvHeap->GetCPUDescriptorHandleForHeapStart(), static_cast<INT>(i),
+        mCbvHeap->GetCPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(RenderingSystem::kObjectCbvStart + i),
         mCbvSrvDescriptorSize);
     mDevice->CreateConstantBufferView(&cbvDescObject, objectCbvHandle);
   }
@@ -458,6 +574,29 @@ void BoxApp::BuildBoxGeometry() {
   for (UINT i = 0; i < numMaterials; ++i) {
     mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
   }
+  mSubmeshInstances.clear();
+  mSubmeshInstances.reserve(mModelGeometry.Submeshes.size());
+  for (UINT objectIndex = 0;
+       objectIndex < static_cast<UINT>(mSceneObjects.size()); ++objectIndex) {
+    const SceneObject& object = mSceneObjects[objectIndex];
+    const UINT submeshEnd = object.SubmeshStart + object.SubmeshCount;
+    for (UINT submeshIndex = object.SubmeshStart; submeshIndex < submeshEnd;
+         ++submeshIndex) {
+      SubmeshInstance instance;
+      instance.ObjectIndex = objectIndex;
+      instance.SubmeshIndex = submeshIndex;
+      instance.LocalBounds = mModelGeometry.Submeshes[submeshIndex].Bounds;
+      instance.WorldBounds =
+          TransformBoundingBox(instance.LocalBounds, object.World);
+      mSubmeshInstances.push_back(instance);
+    }
+  }
+
+  UpdateSceneObjectBounds();
+  BuildSceneAccelerationStructure();
+  mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+  std::iota(mVisibleSubmeshInstanceIndices.begin(),
+            mVisibleSubmeshInstanceIndices.end(), 0);
 }
 
 void BoxApp::CreateFallbackCube() {
@@ -583,6 +722,9 @@ void BoxApp::CreateFallbackCube() {
   submesh.MaterialIndex = 0;
   submesh.IndexCount = 36;
   submesh.StartIndexLocation = 0;
+  DirectX::BoundingBox::CreateFromPoints(
+      submesh.Bounds, DirectX::SimpleMath::Vector3(-1.0f, -1.0f, -1.0f),
+      DirectX::SimpleMath::Vector3(1.0f, 1.0f, 1.0f));
   mModelGeometry.Submeshes.push_back(submesh);
 
   Material defaultMat;
@@ -898,7 +1040,155 @@ void BoxApp::CreateDepthStencil() {
   FlushCommandQueue();
 }
 
+void BoxApp::UpdateSceneObjectBounds() {
+  for (auto& object : mSceneObjects) {
+    object.WorldBounds = TransformBoundingBox(object.LocalBounds, object.World);
+  }
+  for (auto& submeshInstance : mSubmeshInstances) {
+    const auto objectIndex = submeshInstance.ObjectIndex;
+    if (objectIndex >= mSceneObjects.size()) {
+      continue;
+    }
+    submeshInstance.WorldBounds = TransformBoundingBox(
+        submeshInstance.LocalBounds, mSceneObjects[objectIndex].World);
+  }
+}
+
+void BoxApp::BuildSceneAccelerationStructure() {
+  mBvhNodes.clear();
+  mBvhSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+  std::iota(mBvhSubmeshInstanceIndices.begin(),
+            mBvhSubmeshInstanceIndices.end(), 0);
+
+  if (mBvhSubmeshInstanceIndices.empty()) {
+    return;
+  }
+
+  std::function<UINT(UINT, UINT)> buildNode = [&](UINT start,
+                                                  UINT count) -> UINT {
+    BvhNode node;
+    node.StartPrimitive = start;
+    node.PrimitiveCount = count;
+    node.Bounds =
+        mSubmeshInstances[mBvhSubmeshInstanceIndices[start]].WorldBounds;
+    for (UINT i = 1; i < count; ++i) {
+      node.Bounds = MergeBoundingBoxes(
+          node.Bounds,
+          mSubmeshInstances[mBvhSubmeshInstanceIndices[start + i]].WorldBounds);
+    }
+
+    const UINT nodeIndex = static_cast<UINT>(mBvhNodes.size());
+    mBvhNodes.push_back(node);
+
+    constexpr UINT kLeafObjectCount = 4;
+    if (count <= kLeafObjectCount) {
+      return nodeIndex;
+    }
+
+    DirectX::SimpleMath::Vector3 centroidMin(FLT_MAX, FLT_MAX, FLT_MAX);
+    DirectX::SimpleMath::Vector3 centroidMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    for (UINT i = 0; i < count; ++i) {
+      const auto& bounds =
+          mSubmeshInstances[mBvhSubmeshInstanceIndices[start + i]].WorldBounds;
+      const auto& center = bounds.Center;
+      centroidMin.x = std::min(centroidMin.x, center.x);
+      centroidMin.y = std::min(centroidMin.y, center.y);
+      centroidMin.z = std::min(centroidMin.z, center.z);
+      centroidMax.x = std::max(centroidMax.x, center.x);
+      centroidMax.y = std::max(centroidMax.y, center.y);
+      centroidMax.z = std::max(centroidMax.z, center.z);
+    }
+
+    DirectX::SimpleMath::Vector3 extent = centroidMax - centroidMin;
+    int splitAxis = 0;
+    if (extent.y > extent.x && extent.y >= extent.z) {
+      splitAxis = 1;
+    } else if (extent.z > extent.x && extent.z >= extent.y) {
+      splitAxis = 2;
+    }
+
+    auto axisValue = [&](UINT primitiveIndex) {
+      const auto& center = mSubmeshInstances[primitiveIndex].WorldBounds.Center;
+      if (splitAxis == 1) return center.y;
+      if (splitAxis == 2) return center.z;
+      return center.x;
+    };
+
+    UINT mid = start + count / 2;
+    std::nth_element(
+        mBvhSubmeshInstanceIndices.begin() + start,
+        mBvhSubmeshInstanceIndices.begin() + mid,
+        mBvhSubmeshInstanceIndices.begin() + start + count,
+        [&](UINT lhs, UINT rhs) { return axisValue(lhs) < axisValue(rhs); });
+
+    mBvhNodes[nodeIndex].LeftChild = buildNode(start, mid - start);
+    mBvhNodes[nodeIndex].RightChild = buildNode(mid, start + count - mid);
+    mBvhNodes[nodeIndex].PrimitiveCount = 0;
+    return nodeIndex;
+  };
+
+  buildNode(0, static_cast<UINT>(mBvhSubmeshInstanceIndices.size()));
+}
+
+void BoxApp::CollectVisibleObjects(const DirectX::BoundingFrustum& frustum) {
+  mVisibleSubmeshInstanceIndices.clear();
+
+  if (!mFrustumCullingEnabled || mBvhNodes.empty()) {
+    mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+    std::iota(mVisibleSubmeshInstanceIndices.begin(),
+              mVisibleSubmeshInstanceIndices.end(), 0);
+    return;
+  }
+
+  std::vector<std::pair<UINT, bool>> stack;
+  stack.emplace_back(0, false);
+  while (!stack.empty()) {
+    const UINT nodeIndex = stack.back().first;
+    const bool inheritedFullyVisible = stack.back().second;
+    stack.pop_back();
+
+    const auto& node = mBvhNodes[nodeIndex];
+    bool nodeFullyVisible = inheritedFullyVisible;
+    if (!inheritedFullyVisible) {
+      if (!frustum.Intersects(node.Bounds)) {
+        continue;
+      }
+      const auto intersection = frustum.Contains(node.Bounds);
+      nodeFullyVisible = (intersection == DirectX::CONTAINS);
+    }
+
+    if (node.IsLeaf()) {
+      for (UINT i = 0; i < node.PrimitiveCount; ++i) {
+        const UINT primitiveIndex =
+            mBvhSubmeshInstanceIndices[node.StartPrimitive + i];
+        if (nodeFullyVisible ||
+            frustum.Intersects(mSubmeshInstances[primitiveIndex].WorldBounds)) {
+          mVisibleSubmeshInstanceIndices.push_back(primitiveIndex);
+        }
+      }
+      continue;
+    }
+
+    if (node.RightChild != UINT_MAX) {
+      stack.emplace_back(node.RightChild, nodeFullyVisible);
+    }
+    if (node.LeftChild != UINT_MAX) {
+      stack.emplace_back(node.LeftChild, nodeFullyVisible);
+    }
+  }
+  /*/*if (mVisibleSubmeshInstanceIndices.empty() && !mSubmeshInstances.empty())
+  { mVisibleSubmeshInstanceIndices.resize(mSubmeshInstances.size());
+    std::iota(mVisibleSubmeshInstanceIndices.begin(),
+              mVisibleSubmeshInstanceIndices.end(), 0);
+  }*/
+}
+
 void BoxApp::Update(const GameTimer& gt) {
+  const bool isToggleKeyDown = (GetAsyncKeyState('C') & 0x8000) != 0;
+  if (isToggleKeyDown && !mFrustumCullingToggleKeyWasDown) {
+    mFrustumCullingEnabled = !mFrustumCullingEnabled;
+  }
+  mFrustumCullingToggleKeyWasDown = isToggleKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
@@ -937,6 +1227,17 @@ void BoxApp::Update(const GameTimer& gt) {
                                                     mCamPos.z, 1.0f);
   const float totalTime = gt.TotalTime();
   const DirectX::SimpleMath::Matrix viewProj = mView * mProj;
+
+  UpdateSceneObjectBounds();
+  BuildSceneAccelerationStructure();
+
+  DirectX::BoundingFrustum viewSpaceFrustum;
+  DirectX::BoundingFrustum::CreateFromMatrix(viewSpaceFrustum, mProj, true);
+  const DirectX::SimpleMath::Matrix invView = mView.Invert();
+  DirectX::BoundingFrustum cameraFrustum;
+  viewSpaceFrustum.Transform(cameraFrustum, invView);
+  CollectVisibleObjects(cameraFrustum);
+
   for (size_t i = 0; i < mSceneObjects.size(); ++i) {
     ObjectConstants objConstants;
     objConstants.World = mSceneObjects[i].World.Transpose();
@@ -1069,6 +1370,7 @@ void BoxApp::Draw(const GameTimer& gt) {
                           mSamplerHeap.Get(), mCbvSrvDescriptorSize,
                           mScreenViewport, mScissorRect, mVertexBufferView,
                           mIndexBufferView, mModelGeometry, mSceneObjects,
+                          mSubmeshInstances, mVisibleSubmeshInstanceIndices,
                           mMaterialCB.get(), mDepthStencilBuffer.Get(),
                           mComposeCB->Resource()->GetGPUVirtualAddress());
 

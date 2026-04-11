@@ -198,6 +198,8 @@ void RenderingSystem::Render(
     const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     const ModelGeometry& modelGeometry,
     const std::vector<SceneObject>& sceneObjects,
+    const std::vector<SubmeshInstance>& submeshInstances,
+    const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
     D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress) {
   cmdList->RSSetViewports(1, &viewport);
@@ -234,62 +236,69 @@ void RenderingSystem::Render(
     cmdList->SetGraphicsRootDescriptorTable(4, defaultTextureHandle);
   }
 
-  for (size_t objectIndex = 0; objectIndex < sceneObjects.size();
-       ++objectIndex) {
+  for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
+    if (visibleInstanceIndex >= submeshInstances.size()) {
+      continue;
+    }
+
+    const SubmeshInstance& submeshInstance =
+        submeshInstances[visibleInstanceIndex];
+    const UINT objectIndex = submeshInstance.ObjectIndex;
+    const UINT submeshIndex = submeshInstance.SubmeshIndex;
+    if (objectIndex >= sceneObjects.size() ||
+        submeshIndex >= modelGeometry.Submeshes.size()) {
+      continue;
+    }
+
     CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
         cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-        static_cast<INT>(objectIndex), cbvSrvDescriptorSize);
+        static_cast<INT>(kObjectCbvStart + objectIndex), cbvSrvDescriptorSize);
     cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
 
-    const auto& sceneObject = sceneObjects[objectIndex];
-    const UINT submeshEnd = sceneObject.SubmeshStart + sceneObject.SubmeshCount;
-    for (UINT submeshIndex = sceneObject.SubmeshStart;
-         submeshIndex < submeshEnd; ++submeshIndex) {
-      const auto& submesh = modelGeometry.Submeshes[submeshIndex];
-      if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
-        const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
+    const auto& submesh = modelGeometry.Submeshes[submeshIndex];
+    if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
+      const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
 
-        if (mat.DiffuseTextureIndex >= 0) {
-          CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(
-              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-              static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
-              cbvSrvDescriptorSize);
-          cmdList->SetGraphicsRootDescriptorTable(1, diffuseHandle);
-        }
-
-        if (mat.NormalTextureIndex >= 0) {
-          CD3DX12_GPU_DESCRIPTOR_HANDLE normalHandle(
-              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-              static_cast<INT>(kTextureSrvStart + mat.NormalTextureIndex),
-              cbvSrvDescriptorSize);
-          cmdList->SetGraphicsRootDescriptorTable(2, normalHandle);
-        }
-
-        if (mat.DisplacementTextureIndex >= 0) {
-          CD3DX12_GPU_DESCRIPTOR_HANDLE displacementHandle(
-              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-              static_cast<INT>(kTextureSrvStart + mat.DisplacementTextureIndex),
-              cbvSrvDescriptorSize);
-          cmdList->SetGraphicsRootDescriptorTable(3, displacementHandle);
-        }
-
-        if (mat.RoughnessTextureIndex >= 0) {
-          CD3DX12_GPU_DESCRIPTOR_HANDLE roughnessHandle(
-              cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
-              static_cast<INT>(kTextureSrvStart + mat.RoughnessTextureIndex),
-              cbvSrvDescriptorSize);
-          cmdList->SetGraphicsRootDescriptorTable(4, roughnessHandle);
-        }
-
-        D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
-            materialCB->Resource()->GetGPUVirtualAddress() +
-            static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
-        cmdList->SetGraphicsRootConstantBufferView(6, matCBAddress);
+      if (mat.DiffuseTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(1, diffuseHandle);
       }
 
-      cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
-                                    submesh.StartIndexLocation, 0, 0);
+      if (mat.NormalTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE normalHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.NormalTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(2, normalHandle);
+      }
+
+      if (mat.DisplacementTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE displacementHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.DisplacementTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(3, displacementHandle);
+      }
+
+      if (mat.RoughnessTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE roughnessHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.RoughnessTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(4, roughnessHandle);
+      }
+
+      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
+          materialCB->Resource()->GetGPUVirtualAddress() +
+          static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
+      cmdList->SetGraphicsRootConstantBufferView(6, matCBAddress);
     }
+
+    cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                  submesh.StartIndexLocation, 0, 0);
   }
 
   mGBuffer.EndGeometryPass(cmdList);

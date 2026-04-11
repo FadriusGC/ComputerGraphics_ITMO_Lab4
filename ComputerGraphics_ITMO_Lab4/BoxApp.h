@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -87,6 +88,9 @@ class BoxApp {
   void FlushCommandQueue();
   void CalculateFrameStats();
   void ResetFallingLight(FallingPointLight& light);
+  void BuildSceneAccelerationStructure();
+  void UpdateSceneObjectBounds();
+  void CollectVisibleObjects(const DirectX::BoundingFrustum& frustum);
 
   D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
   D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
@@ -168,6 +172,23 @@ class BoxApp {
   D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
   D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
   UINT mIndexCount = 0;
+  struct BvhNode {
+    DirectX::BoundingBox Bounds;
+    UINT LeftChild = UINT_MAX;
+    UINT RightChild = UINT_MAX;
+    UINT StartPrimitive = 0;
+    UINT PrimitiveCount = 0;
+
+    bool IsLeaf() const {
+      return LeftChild == UINT_MAX && RightChild == UINT_MAX;
+    }
+  };
+  std::vector<BvhNode> mBvhNodes;
+  std::vector<UINT> mBvhSubmeshInstanceIndices;
+  std::vector<UINT> mVisibleSubmeshInstanceIndices;
+  std::vector<SubmeshInstance> mSubmeshInstances;
+  bool mFrustumCullingEnabled = true;
+  bool mFrustumCullingToggleKeyWasDown = false;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;
