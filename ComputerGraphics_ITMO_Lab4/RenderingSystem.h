@@ -36,7 +36,8 @@ class RenderingSystem {
               const std::vector<UINT>& visibleSubmeshInstanceIndices,
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,
-              D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress);
+              D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+              const DirectX::SimpleMath::Vector3& cameraPosition);
 
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
