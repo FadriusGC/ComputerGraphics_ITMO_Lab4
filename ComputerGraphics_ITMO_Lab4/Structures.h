@@ -3,6 +3,7 @@
 #include <DirectXCollision.h>
 #include <SimpleMath.h>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -18,9 +19,12 @@ struct Vertex {
 };
 
 struct Submesh {
+  static constexpr UINT kLodCount = 3;
   UINT MaterialIndex = 0;       // индекс в списке материалов
   UINT IndexCount = 0;          // количество индексов в этой сабмеши
   UINT StartIndexLocation = 0;  // смещение в общем буфере индексов
+  std::array<UINT, kLodCount> LodIndexCount = {0, 0, 0};
+  std::array<UINT, kLodCount> LodStartIndexLocation = {0, 0, 0};
   DirectX::BoundingBox Bounds;
 };
 
@@ -48,6 +52,8 @@ struct SceneObject {
   DirectX::BoundingBox WorldBounds;
   DirectX::SimpleMath::Vector4 TessellationParams =
       DirectX::SimpleMath::Vector4(25.0f, 350.0f, 12.0f, 1.0f);
+  DirectX::SimpleMath::Vector4 LodDistances =
+      DirectX::SimpleMath::Vector4(60.0f, 140.0f, 0.0f, 0.0f);
   DirectX::SimpleMath::Vector4 WaveParams =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 };

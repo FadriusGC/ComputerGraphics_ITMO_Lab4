@@ -201,7 +201,8 @@ void RenderingSystem::Render(
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
-    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress) {
+    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+    const DirectX::SimpleMath::Vector3& cameraPosition) {
   cmdList->RSSetViewports(1, &viewport);
   cmdList->RSSetScissorRects(1, &scissorRect);
 
@@ -256,6 +257,26 @@ void RenderingSystem::Render(
     cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
 
     const auto& submesh = modelGeometry.Submeshes[submeshIndex];
+
+    float distanceToCamera =
+        (submeshInstance.WorldBounds.Center - cameraPosition).Length();
+    const DirectX::SimpleMath::Vector4 lodDistances =
+        sceneObjects[objectIndex].LodDistances;
+    UINT lodLevel = 0;
+    if (distanceToCamera >= lodDistances.y) {
+      lodLevel = 2;
+    } else if (distanceToCamera >= lodDistances.x) {
+      lodLevel = 1;
+    }
+
+    const UINT lodIndexCount = submesh.LodIndexCount[lodLevel] > 0
+                                   ? submesh.LodIndexCount[lodLevel]
+                                   : submesh.IndexCount;
+    const UINT lodStartIndexLocation =
+        submesh.LodIndexCount[lodLevel] > 0
+            ? submesh.LodStartIndexLocation[lodLevel]
+            : submesh.StartIndexLocation;
+
     if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
       const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
 
@@ -297,8 +318,8 @@ void RenderingSystem::Render(
       cmdList->SetGraphicsRootConstantBufferView(6, matCBAddress);
     }
 
-    cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
-                                  submesh.StartIndexLocation, 0, 0);
+    cmdList->DrawIndexedInstanced(lodIndexCount, 1, lodStartIndexLocation, 0,
+                                  0);
   }
 
   mGBuffer.EndGeometryPass(cmdList);

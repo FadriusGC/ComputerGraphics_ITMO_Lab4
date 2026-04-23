@@ -1,7 +1,9 @@
 ﻿#define NOMINMAX
 #include "BoxApp.h"
 
+#include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <numeric>
 #include <utility>
 
@@ -341,6 +343,8 @@ void BoxApp::BuildBoxGeometry() {
     auto appendGeometry =
         [&](const ModelGeometry& src, const DirectX::SimpleMath::Matrix& world,
             const DirectX::SimpleMath::Vector4& tessellationParams,
+            const DirectX::SimpleMath::Vector4& lodDistances,
+            const DirectX::SimpleMath::Vector4& lodKeepFractions,
             const DirectX::SimpleMath::Vector4& waveParams) {
           if (src.Vertices.empty() || src.Submeshes.empty()) {
             return;
@@ -352,22 +356,18 @@ void BoxApp::BuildBoxGeometry() {
           object.SubmeshCount = static_cast<UINT>(src.Submeshes.size());
           object.World = world;
           object.TessellationParams = tessellationParams;
+
+          object.LodDistances = lodDistances;
           object.WaveParams = waveParams;
 
           const uint32_t vertexOffset =
               static_cast<uint32_t>(mModelGeometry.Vertices.size());
-          const uint32_t indexOffset =
-              static_cast<uint32_t>(mModelGeometry.Indices.size());
           const uint32_t materialOffset =
               static_cast<uint32_t>(mModelGeometry.Materials.size());
 
           mModelGeometry.Vertices.insert(mModelGeometry.Vertices.end(),
                                          src.Vertices.begin(),
                                          src.Vertices.end());
-
-          for (auto index : src.Indices) {
-            mModelGeometry.Indices.push_back(index + vertexOffset);
-          }
 
           for (const auto& srcMaterial : src.Materials) {
             Material copied = srcMaterial;
@@ -377,8 +377,74 @@ void BoxApp::BuildBoxGeometry() {
 
           for (const auto& srcSubmesh : src.Submeshes) {
             Submesh copied = srcSubmesh;
-            copied.StartIndexLocation += indexOffset;
             copied.MaterialIndex += materialOffset;
+            copied.StartIndexLocation =
+                static_cast<UINT>(mModelGeometry.Indices.size());
+            copied.IndexCount = srcSubmesh.IndexCount;
+            copied.LodStartIndexLocation[0] = copied.StartIndexLocation;
+            copied.LodIndexCount[0] = copied.IndexCount;
+
+            const UINT srcTriCount = srcSubmesh.IndexCount / 3;
+            for (UINT tri = 0; tri < srcTriCount; ++tri) {
+              const UINT srcIndex = srcSubmesh.StartIndexLocation + tri * 3;
+              mModelGeometry.Indices.push_back(src.Indices[srcIndex + 0] +
+                                               vertexOffset);
+              mModelGeometry.Indices.push_back(src.Indices[srcIndex + 1] +
+                                               vertexOffset);
+              mModelGeometry.Indices.push_back(src.Indices[srcIndex + 2] +
+                                               vertexOffset);
+            }
+
+            for (UINT lod = 1; lod < Submesh::kLodCount; ++lod) {
+              const float keepFraction =
+                  std::clamp(lod == 1 ? lodKeepFractions.x : lodKeepFractions.y,
+                             0.0f, 1.0f);
+              copied.LodStartIndexLocation[lod] =
+                  static_cast<UINT>(mModelGeometry.Indices.size());
+
+              const UINT triGroupSize = srcTriCount >= 2 ? 2u : 1u;
+              const UINT groupCount =
+                  (srcTriCount + triGroupSize - 1) / triGroupSize;
+              const UINT keepGroupCount = std::max<UINT>(
+                  1u, static_cast<UINT>(std::round(
+                          static_cast<float>(groupCount) * keepFraction)));
+
+              for (UINT group = 0; group < keepGroupCount; ++group) {
+                const UINT mappedGroup = static_cast<UINT>(
+                    std::floor((static_cast<double>(group) * groupCount) /
+                               keepGroupCount));
+                const UINT triBegin = mappedGroup * triGroupSize;
+                const UINT triEnd =
+                    std::min(srcTriCount, triBegin + triGroupSize);
+
+                for (UINT tri = triBegin; tri < triEnd; ++tri) {
+                  const UINT srcIndex = srcSubmesh.StartIndexLocation + tri * 3;
+                  mModelGeometry.Indices.push_back(src.Indices[srcIndex + 0] +
+                                                   vertexOffset);
+                  mModelGeometry.Indices.push_back(src.Indices[srcIndex + 1] +
+                                                   vertexOffset);
+                  mModelGeometry.Indices.push_back(src.Indices[srcIndex + 2] +
+                                                   vertexOffset);
+                }
+              }
+
+              copied.LodIndexCount[lod] =
+                  static_cast<UINT>(mModelGeometry.Indices.size()) -
+                  copied.LodStartIndexLocation[lod];
+
+              if (copied.LodIndexCount[lod] < 3 && srcTriCount > 0) {
+                copied.LodStartIndexLocation[lod] =
+                    static_cast<UINT>(mModelGeometry.Indices.size());
+                const UINT srcIndex = srcSubmesh.StartIndexLocation;
+                mModelGeometry.Indices.push_back(src.Indices[srcIndex + 0] +
+                                                 vertexOffset);
+                mModelGeometry.Indices.push_back(src.Indices[srcIndex + 1] +
+                                                 vertexOffset);
+                mModelGeometry.Indices.push_back(src.Indices[srcIndex + 2] +
+                                                 vertexOffset);
+                copied.LodIndexCount[lod] = 3;
+              }
+            }
             mModelGeometry.Submeshes.push_back(copied);
           }
           DirectX::BoundingBox localBounds;
@@ -401,6 +467,10 @@ void BoxApp::BuildBoxGeometry() {
       const UINT sponzaObjectIndex = static_cast<UINT>(mSceneObjects.size());
       const auto sponzaTessellationParams =
           DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f);
+      const auto sponzaLodDistances =
+          DirectX::SimpleMath::Vector4(90.0f, 180.0f, 0.0f, 0.0f);
+      const auto sponzaLodKeepFractions =
+          DirectX::SimpleMath::Vector4(0.85f, 0.65f, 0.0f, 0.0f);
       const auto sponzaWaveParams =
           DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -408,7 +478,8 @@ void BoxApp::BuildBoxGeometry() {
           sponzaGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kSponzaScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kSponzaPosition),
-          sponzaTessellationParams, sponzaWaveParams);
+          sponzaTessellationParams, sponzaLodDistances, sponzaLodKeepFractions,
+          sponzaWaveParams);
 
       if (sponzaObjectIndex < static_cast<UINT>(mSceneObjects.size())) {
         SceneObject baseSponzaObject = mSceneObjects[sponzaObjectIndex];
@@ -432,6 +503,8 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Matrix::CreateScale(kMountainScale) *
               DirectX::SimpleMath::Matrix::CreateTranslation(kMountainPosition),
           DirectX::SimpleMath::Vector4(80.0f, 1800.0f, 5.0f, 2.0f),
+          DirectX::SimpleMath::Vector4(320.0f, 620.0f, 0.0f, 0.0f),
+          DirectX::SimpleMath::Vector4(0.90f, 0.75f, 0.0f, 0.0f),
           DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
   }
@@ -1364,15 +1437,15 @@ void BoxApp::Update(const GameTimer& gt) {
 void BoxApp::Draw(const GameTimer& gt) {
   ThrowIfFailed(mCommandAllocator->Reset());
   ThrowIfFailed(mCommandList->Reset(mCommandAllocator.Get(), nullptr));
-  mRenderingSystem.Render(mCommandList.Get(), CurrentBackBufferView(),
-                          mSwapChainBuffers[mCurrBackBuffer].Get(),
-                          DepthStencilView(), mCbvHeap.Get(),
-                          mSamplerHeap.Get(), mCbvSrvDescriptorSize,
-                          mScreenViewport, mScissorRect, mVertexBufferView,
-                          mIndexBufferView, mModelGeometry, mSceneObjects,
-                          mSubmeshInstances, mVisibleSubmeshInstanceIndices,
-                          mMaterialCB.get(), mDepthStencilBuffer.Get(),
-                          mComposeCB->Resource()->GetGPUVirtualAddress());
+  mRenderingSystem.Render(
+      mCommandList.Get(), CurrentBackBufferView(),
+      mSwapChainBuffers[mCurrBackBuffer].Get(), DepthStencilView(),
+      mCbvHeap.Get(), mSamplerHeap.Get(), mCbvSrvDescriptorSize,
+      mScreenViewport, mScissorRect, mVertexBufferView, mIndexBufferView,
+      mModelGeometry, mSceneObjects, mSubmeshInstances,
+      mVisibleSubmeshInstanceIndices, mMaterialCB.get(),
+      mDepthStencilBuffer.Get(), mComposeCB->Resource()->GetGPUVirtualAddress(),
+      mCamPos);
 
   ThrowIfFailed(mCommandList->Close());
 
