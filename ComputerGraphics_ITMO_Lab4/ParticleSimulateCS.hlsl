@@ -9,8 +9,6 @@ struct Particle
     float3 Padding;
 };
 
-StructuredBuffer<uint> gDeadListConsume : register(t0);
-StructuredBuffer<Particle> gParticlePoolSRV : register(t1);
 RWStructuredBuffer<Particle> gParticlePool : register(u0);
 AppendStructuredBuffer<uint> gDeadListAppend : register(u1);
 

@@ -159,14 +159,22 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildParticlesComputeRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[5];
-  params[0].InitAsUnorderedAccessView(2);  // deadList consume
-  params[1].InitAsUnorderedAccessView(0);  // Particle pool
-  params[2].InitAsUnorderedAccessView(1);  // DeadList append
-  params[3].InitAsConstantBufferView(0);   // Sim constants
-  params[4].InitAsShaderResourceView(1);   // Particle pool SRV
+  CD3DX12_ROOT_PARAMETER params[4];
+  CD3DX12_DESCRIPTOR_RANGE particlePoolUavRange;
+  particlePoolUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+  params[0].InitAsDescriptorTable(1, &particlePoolUavRange);  // u0
 
-  CD3DX12_ROOT_SIGNATURE_DESC desc(5, params, 0, nullptr,
+  CD3DX12_DESCRIPTOR_RANGE deadAppendUavRange;
+  deadAppendUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1);
+  params[1].InitAsDescriptorTable(1, &deadAppendUavRange);  // u1
+
+  CD3DX12_DESCRIPTOR_RANGE deadConsumeUavRange;
+  deadConsumeUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 2);
+  params[2].InitAsDescriptorTable(1, &deadConsumeUavRange);  // u2
+
+  params[3].InitAsConstantBufferView(0);  // b0
+
+  CD3DX12_ROOT_SIGNATURE_DESC desc(4, params, 0, nullptr,
                                    D3D12_ROOT_SIGNATURE_FLAG_NONE);
 
   ComPtr<ID3DBlob> serialized;
@@ -347,6 +355,10 @@ void RenderingSystem::BuildParticleResources(ID3D12Device* device,
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &renderCbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&mParticleRenderConstantBuffer)));
+  ThrowIfFailed(mParticleSimConstantBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mMappedParticleSimConstants)));
+  ThrowIfFailed(mParticleRenderConstantBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mMappedParticleRenderConstants)));
 
   CD3DX12_CPU_DESCRIPTOR_HANDLE cpuStart(
       cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -364,22 +376,20 @@ void RenderingSystem::BuildParticleResources(ID3D12Device* device,
   device->CreateShaderResourceView(mParticlePoolBuffer.Get(), &particleSrvDesc,
                                    particleSrvCpu);
 
-  D3D12_SHADER_RESOURCE_VIEW_DESC deadSrvDesc = {};
-  deadSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-  deadSrvDesc.Shader4ComponentMapping =
-      D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  deadSrvDesc.Buffer.FirstElement = 0;
-  deadSrvDesc.Buffer.NumElements = kParticleMaxCount;
-  deadSrvDesc.Buffer.StructureByteStride = deadListStride;
-  deadSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-  device->CreateShaderResourceView(
-      mDeadListABuffer.Get(), &deadSrvDesc,
-      CD3DX12_CPU_DESCRIPTOR_HANDLE(cpuStart, kDeadListAConsumeSrvIndex,
-                                    cbvSrvDescriptorSize));
-  device->CreateShaderResourceView(
-      mDeadListBBuffer.Get(), &deadSrvDesc,
-      CD3DX12_CPU_DESCRIPTOR_HANDLE(cpuStart, kDeadListBConsumeSrvIndex,
-                                    cbvSrvDescriptorSize));
+  D3D12_UNORDERED_ACCESS_VIEW_DESC particlePoolUavDesc = {};
+  particlePoolUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+  particlePoolUavDesc.Buffer.FirstElement = 0;
+  particlePoolUavDesc.Buffer.NumElements = kParticleMaxCount;
+  particlePoolUavDesc.Buffer.StructureByteStride = particleStride;
+  particlePoolUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+  mParticlePoolUavCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+      cpuStart, kParticlePoolUavIndex, cbvSrvDescriptorSize);
+  mParticlePoolUavGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kParticlePoolUavIndex,
+      cbvSrvDescriptorSize);
+  device->CreateUnorderedAccessView(mParticlePoolBuffer.Get(), nullptr,
+                                    &particlePoolUavDesc,
+                                    mParticlePoolUavCpuHandle);
 
   D3D12_UNORDERED_ACCESS_VIEW_DESC deadUavDesc = {};
   deadUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
@@ -435,12 +445,18 @@ void RenderingSystem::SimulateParticles(
   if (!mParticlesInitialized) {
     cmdList->SetPipelineState(mParticlesInitPSO.Get());
     cmdList->SetComputeRootSignature(mParticlesComputeRootSignature.Get());
-    cmdList->SetComputeRootUnorderedAccessView(
-        1, mParticlePoolBuffer->GetGPUVirtualAddress());
-    cmdList->SetComputeRootUnorderedAccessView(
-        2, mDeadListABuffer->GetGPUVirtualAddress());
+    cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+    cmdList->SetComputeRootDescriptorTable(1, mDeadListAUavGpuHandle);
+    cmdList->SetComputeRootDescriptorTable(2, mDeadListAUavGpuHandle);
     cmdList->SetComputeRootConstantBufferView(
         3, mParticleSimConstantBuffer->GetGPUVirtualAddress());
+    const UINT clearValues[4] = {0, 0, 0, 0};
+    cmdList->ClearUnorderedAccessViewUint(
+        mDeadListAUavGpuHandle, mDeadListAUavCpuHandle, mDeadListABuffer.Get(),
+        clearValues, 0, nullptr);
+    cmdList->ClearUnorderedAccessViewUint(
+        mDeadListBUavGpuHandle, mDeadListBUavCpuHandle, mDeadListBBuffer.Get(),
+        clearValues, 0, nullptr);
     cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
     auto initBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
     cmdList->ResourceBarrier(1, &initBarrier);
@@ -459,22 +475,24 @@ void RenderingSystem::SimulateParticles(
 
   cmdList->SetPipelineState(mParticlesEmitPSO.Get());
   cmdList->SetComputeRootSignature(mParticlesComputeRootSignature.Get());
-  cmdList->SetComputeRootUnorderedAccessView(
-      0, consumeDeadList->GetGPUVirtualAddress());
-  cmdList->SetComputeRootUnorderedAccessView(
-      1, mParticlePoolBuffer->GetGPUVirtualAddress());
-  cmdList->SetComputeRootUnorderedAccessView(
-      2, appendDeadList->GetGPUVirtualAddress());
+  cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+  cmdList->SetComputeRootDescriptorTable(1, appendDeadUavGpu);
+  cmdList->SetComputeRootDescriptorTable(2, mUseDeadListAAsConsume
+                                                ? mDeadListAUavGpuHandle
+                                                : mDeadListBUavGpuHandle);
   cmdList->SetComputeRootConstantBufferView(
       3, mParticleSimConstantBuffer->GetGPUVirtualAddress());
-  cmdList->SetComputeRootShaderResourceView(
-      4, mParticlePoolBuffer->GetGPUVirtualAddress());
   cmdList->Dispatch((mMappedParticleSimConstants->SpawnCount + 63) / 64, 1, 1);
 
   auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
   cmdList->ResourceBarrier(1, &uavBarrier);
 
   cmdList->SetPipelineState(mParticlesSimulatePSO.Get());
+  cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+  cmdList->SetComputeRootDescriptorTable(1, appendDeadUavGpu);
+  cmdList->SetComputeRootDescriptorTable(2, mUseDeadListAAsConsume
+                                                ? mDeadListAUavGpuHandle
+                                                : mDeadListBUavGpuHandle);
   cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
   cmdList->ResourceBarrier(1, &uavBarrier);
 

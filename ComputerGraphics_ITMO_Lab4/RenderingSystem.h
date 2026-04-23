@@ -116,10 +116,9 @@ class RenderingSystem {
 
   static constexpr UINT kParticleMaxCount = 16384;
   static constexpr UINT kParticlePoolSrvIndex = kTextureSrvStart + 256;
-  static constexpr UINT kDeadListAConsumeSrvIndex = kParticlePoolSrvIndex + 1;
+  static constexpr UINT kParticlePoolUavIndex = kParticlePoolSrvIndex + 1;
   static constexpr UINT kDeadListAUavIndex = kParticlePoolSrvIndex + 2;
-  static constexpr UINT kDeadListBConsumeSrvIndex = kParticlePoolSrvIndex + 3;
-  static constexpr UINT kDeadListBUavIndex = kParticlePoolSrvIndex + 4;
+  static constexpr UINT kDeadListBUavIndex = kParticlePoolSrvIndex + 3;
 
   ComPtr<ID3D12Resource> mParticlePoolBuffer;
   ComPtr<ID3D12Resource> mDeadListABuffer;
@@ -135,6 +134,8 @@ class RenderingSystem {
   float mParticlesTotalTime = 0.0f;
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListAUavCpuHandle = {};
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListBUavCpuHandle = {};
+  D3D12_CPU_DESCRIPTOR_HANDLE mParticlePoolUavCpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListAUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListBUavGpuHandle = {};
+  D3D12_GPU_DESCRIPTOR_HANDLE mParticlePoolUavGpuHandle = {};
 };
