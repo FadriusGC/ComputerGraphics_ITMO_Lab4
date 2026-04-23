@@ -127,11 +127,13 @@ class RenderingSystem {
   ComPtr<ID3D12Resource> mDeadListACounterBuffer;
   ComPtr<ID3D12Resource> mParticleSimConstantBuffer;
   ComPtr<ID3D12Resource> mParticleRenderConstantBuffer;
+  ComPtr<ID3D12Resource> mParticleCounterResetBuffer;
   ParticleSimConstants* mMappedParticleSimConstants = nullptr;
   ParticleRenderConstants* mMappedParticleRenderConstants = nullptr;
   bool mUseDeadListAAsConsume = true;
   bool mParticlesInitialized = false;
   float mParticlesTotalTime = 0.0f;
+  D3D12_RESOURCE_STATES mParticlePoolState = D3D12_RESOURCE_STATE_COMMON;
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListAUavCpuHandle = {};
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListBUavCpuHandle = {};
   D3D12_CPU_DESCRIPTOR_HANDLE mParticlePoolUavCpuHandle = {};

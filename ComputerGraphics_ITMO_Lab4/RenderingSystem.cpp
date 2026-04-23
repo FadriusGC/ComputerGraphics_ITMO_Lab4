@@ -327,20 +327,32 @@ void RenderingSystem::BuildParticleResources(ID3D12Device* device,
   const UINT particlePoolSize = kParticleMaxCount * particleStride;
   const UINT deadListSize = kParticleMaxCount * deadListStride;
 
-  auto createDefaultBuffer = [&](UINT64 size, ComPtr<ID3D12Resource>& buffer) {
-    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
-    const CD3DX12_RESOURCE_DESC bufferDesc =
-        CD3DX12_RESOURCE_DESC::Buffer(size);
-    ThrowIfFailed(device->CreateCommittedResource(
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer)));
-  };
+  auto createDefaultBuffer =
+      [&](UINT64 size, D3D12_RESOURCE_STATES initialState,
+          D3D12_RESOURCE_FLAGS flags, ComPtr<ID3D12Resource>& buffer) {
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC bufferDesc =
+            CD3DX12_RESOURCE_DESC::Buffer(size, flags);
+        ThrowIfFailed(device->CreateCommittedResource(
+            &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc, initialState,
+            nullptr, IID_PPV_ARGS(&buffer)));
+      };
 
-  createDefaultBuffer(particlePoolSize, mParticlePoolBuffer);
-  createDefaultBuffer(deadListSize, mDeadListABuffer);
-  createDefaultBuffer(deadListSize, mDeadListBBuffer);
-  createDefaultBuffer(sizeof(UINT), mDeadListACounterBuffer);
-  createDefaultBuffer(sizeof(UINT), mDeadListBCounterBuffer);
+  createDefaultBuffer(particlePoolSize, D3D12_RESOURCE_STATE_COMMON,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mParticlePoolBuffer);
+  createDefaultBuffer(deadListSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListABuffer);
+  createDefaultBuffer(deadListSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListBBuffer);
+  createDefaultBuffer(sizeof(UINT), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListACounterBuffer);
+  createDefaultBuffer(sizeof(UINT), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListBCounterBuffer);
 
   const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
   const CD3DX12_RESOURCE_DESC simCbDesc =
@@ -355,10 +367,21 @@ void RenderingSystem::BuildParticleResources(ID3D12Device* device,
       &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &renderCbDesc,
       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
       IID_PPV_ARGS(&mParticleRenderConstantBuffer)));
+  const CD3DX12_RESOURCE_DESC counterResetDesc =
+      CD3DX12_RESOURCE_DESC::Buffer(sizeof(UINT));
+  ThrowIfFailed(device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &counterResetDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&mParticleCounterResetBuffer)));
   ThrowIfFailed(mParticleSimConstantBuffer->Map(
       0, nullptr, reinterpret_cast<void**>(&mMappedParticleSimConstants)));
   ThrowIfFailed(mParticleRenderConstantBuffer->Map(
       0, nullptr, reinterpret_cast<void**>(&mMappedParticleRenderConstants)));
+  UINT* mappedCounterReset = nullptr;
+  ThrowIfFailed(mParticleCounterResetBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mappedCounterReset)));
+  mappedCounterReset[0] = 0u;
+  mParticleCounterResetBuffer->Unmap(0, nullptr);
 
   CD3DX12_CPU_DESCRIPTOR_HANDLE cpuStart(
       cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -428,19 +451,27 @@ void RenderingSystem::SimulateParticles(
   mMappedParticleSimConstants->EmitterPosition = cameraPosition;
   mMappedParticleSimConstants->EmitterSpread = 8.0f;
 
-  ID3D12Resource* consumeDeadList =
-      mUseDeadListAAsConsume ? mDeadListABuffer.Get() : mDeadListBBuffer.Get();
-  ID3D12Resource* appendDeadList =
-      mUseDeadListAAsConsume ? mDeadListBBuffer.Get() : mDeadListABuffer.Get();
-  auto appendDeadUavCpu =
-      mUseDeadListAAsConsume ? mDeadListBUavCpuHandle : mDeadListAUavCpuHandle;
   auto appendDeadUavGpu =
       mUseDeadListAAsConsume ? mDeadListBUavGpuHandle : mDeadListAUavGpuHandle;
 
   auto toCompute = CD3DX12_RESOURCE_BARRIER::Transition(
-      mParticlePoolBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
+      mParticlePoolBuffer.Get(), mParticlePoolState,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   cmdList->ResourceBarrier(1, &toCompute);
+  mParticlePoolState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+  auto resetCounter = [&](ID3D12Resource* counterBuffer) {
+    auto toCopyDest = CD3DX12_RESOURCE_BARRIER::Transition(
+        counterBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    cmdList->ResourceBarrier(1, &toCopyDest);
+    cmdList->CopyBufferRegion(
+        counterBuffer, 0, mParticleCounterResetBuffer.Get(), 0, sizeof(UINT));
+    auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+        counterBuffer, D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cmdList->ResourceBarrier(1, &toUav);
+  };
 
   if (!mParticlesInitialized) {
     cmdList->SetPipelineState(mParticlesInitPSO.Get());
@@ -450,28 +481,18 @@ void RenderingSystem::SimulateParticles(
     cmdList->SetComputeRootDescriptorTable(2, mDeadListAUavGpuHandle);
     cmdList->SetComputeRootConstantBufferView(
         3, mParticleSimConstantBuffer->GetGPUVirtualAddress());
-    const UINT clearValues[4] = {0, 0, 0, 0};
-    cmdList->ClearUnorderedAccessViewUint(
-        mDeadListAUavGpuHandle, mDeadListAUavCpuHandle, mDeadListABuffer.Get(),
-        clearValues, 0, nullptr);
-    cmdList->ClearUnorderedAccessViewUint(
-        mDeadListBUavGpuHandle, mDeadListBUavCpuHandle, mDeadListBBuffer.Get(),
-        clearValues, 0, nullptr);
+    resetCounter(mDeadListACounterBuffer.Get());
+    resetCounter(mDeadListBCounterBuffer.Get());
     cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
     auto initBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
     cmdList->ResourceBarrier(1, &initBarrier);
     mParticlesInitialized = true;
     mUseDeadListAAsConsume = true;
-    consumeDeadList = mDeadListABuffer.Get();
-    appendDeadList = mDeadListBBuffer.Get();
-    appendDeadUavCpu = mDeadListBUavCpuHandle;
     appendDeadUavGpu = mDeadListBUavGpuHandle;
   }
 
-  const UINT clearValues[4] = {0, 0, 0, 0};
-  cmdList->ClearUnorderedAccessViewUint(appendDeadUavGpu, appendDeadUavCpu,
-                                        appendDeadList, clearValues, 0,
-                                        nullptr);
+  resetCounter(mUseDeadListAAsConsume ? mDeadListBCounterBuffer.Get()
+                                      : mDeadListACounterBuffer.Get());
 
   cmdList->SetPipelineState(mParticlesEmitPSO.Get());
   cmdList->SetComputeRootSignature(mParticlesComputeRootSignature.Get());
@@ -496,10 +517,11 @@ void RenderingSystem::SimulateParticles(
   cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
   cmdList->ResourceBarrier(1, &uavBarrier);
 
-  auto toCommon = CD3DX12_RESOURCE_BARRIER::Transition(
+  auto toRender = CD3DX12_RESOURCE_BARRIER::Transition(
       mParticlePoolBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-      D3D12_RESOURCE_STATE_COMMON);
-  cmdList->ResourceBarrier(1, &toCommon);
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  cmdList->ResourceBarrier(1, &toRender);
+  mParticlePoolState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
   mUseDeadListAAsConsume = !mUseDeadListAAsConsume;
 }
