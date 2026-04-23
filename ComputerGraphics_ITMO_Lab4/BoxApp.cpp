@@ -469,8 +469,10 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Vector4(20.0f, 300.0f, 5.0f, 1.0f);
       const auto sponzaLodDistances =
           DirectX::SimpleMath::Vector4(90.0f, 180.0f, 0.0f, 0.0f);
+      /*const auto sponzaLodKeepFractions =
+          DirectX::SimpleMath::Vector4(0.85f, 0.65f, 0.0f, 0.0f);*/
       const auto sponzaLodKeepFractions =
-          DirectX::SimpleMath::Vector4(0.85f, 0.65f, 0.0f, 0.0f);
+          DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
       const auto sponzaWaveParams =
           DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 
