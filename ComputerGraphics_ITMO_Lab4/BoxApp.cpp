@@ -835,11 +835,6 @@ void BoxApp::LoadAllTextures() {
     addTextureName(mat.RoughnessTexture);
   }
 
-  if (uniqueTexturePaths.empty()) {
-    OutputDebugStringA("No textures found.\n");
-    return;
-  }
-
   // Загружаем текстуры
   for (const auto& texName : uniqueTexturePaths) {
     // Формируем полный путь к текстуре
@@ -905,6 +900,16 @@ void BoxApp::LoadAllTextures() {
       mat.Data.HasRoughnessMap = 0.0f;
     }
   }
+  auto smokeTexture = std::make_unique<Texture>();
+  smokeTexture->name = "smoke.dds";
+  smokeTexture->filepath =
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/textures/smoke.dds";
+  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+      mDevice.Get(), mCommandList.Get(), smokeTexture->filepath.c_str(),
+      smokeTexture->Resource, smokeTexture->UploadHeap));
+  CreateSRV(smokeTexture->Resource, RenderingSystem::kParticleSmokeSrvIndex);
+  mTextures.push_back(std::move(smokeTexture));
 
   OutputDebugStringA(
       ("Loaded " + std::to_string(mTextures.size()) + " textures.\n").c_str());
