@@ -1447,7 +1447,7 @@ void BoxApp::Draw(const GameTimer& gt) {
       mModelGeometry, mSceneObjects, mSubmeshInstances,
       mVisibleSubmeshInstanceIndices, mMaterialCB.get(),
       mDepthStencilBuffer.Get(), mComposeCB->Resource()->GetGPUVirtualAddress(),
-      mCamPos);
+      gt.DeltaTime(), mView * mProj, mCamPos);
 
   ThrowIfFailed(mCommandList->Close());
 

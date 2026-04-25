@@ -9,12 +9,19 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
   BuildInputLayout();
   BuildGeometryRootSignature(device);
   BuildComposeRootSignature(device);
+  BuildParticlesComputeRootSignature(device);
+  BuildParticlesRenderRootSignature(device);
   BuildGeometryPSO(device);
   BuildComposePSO(device);
+  BuildParticlesEmitPSO(device);
+  BuildParticlesInitPSO(device);
+  BuildParticlesSimulatePSO(device);
+  BuildParticlesRenderPSO(device);
 
   mGBuffer.Initialize(device, width, height, rtvHeap, cbvSrvHeap,
                       rtvDescriptorSize, cbvSrvDescriptorSize, kGBufferRtvStart,
                       kGBufferSrvStart);
+  BuildParticleResources(device, cbvSrvHeap, cbvSrvDescriptorSize);
 }
 
 void RenderingSystem::BuildShaders() {
@@ -41,6 +48,30 @@ void RenderingSystem::BuildShaders() {
   mComposePS = ShaderHelper::CompileShader(
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/DeferredComposePS.hlsl",
+      "PS", "ps_5_0");
+  mParticlesEmitCS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticleEmitCS.hlsl",
+      "CS", "cs_5_0");
+  mParticlesInitCS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticleInitCS.hlsl",
+      "CS", "cs_5_0");
+  mParticlesSimulateCS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticleSimulateCS.hlsl",
+      "CS", "cs_5_0");
+  mParticlesVS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticleVS.hlsl",
+      "VS", "vs_5_0");
+  mParticlesGS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticleGS.hlsl",
+      "GS", "gs_5_0");
+  mParticlesPS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ParticlePS.hlsl",
       "PS", "ps_5_0");
 }
 
@@ -127,6 +158,52 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
       IID_PPV_ARGS(&mComposeRootSignature)));
 }
 
+void RenderingSystem::BuildParticlesComputeRootSignature(ID3D12Device* device) {
+  CD3DX12_ROOT_PARAMETER params[4];
+  CD3DX12_DESCRIPTOR_RANGE particlePoolUavRange;
+  particlePoolUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+  params[0].InitAsDescriptorTable(1, &particlePoolUavRange);  // u0
+
+  CD3DX12_DESCRIPTOR_RANGE deadAppendUavRange;
+  deadAppendUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1);
+  params[1].InitAsDescriptorTable(1, &deadAppendUavRange);  // u1
+
+  CD3DX12_DESCRIPTOR_RANGE deadConsumeUavRange;
+  deadConsumeUavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 2);
+  params[2].InitAsDescriptorTable(1, &deadConsumeUavRange);  // u2
+
+  params[3].InitAsConstantBufferView(0);  // b0
+
+  CD3DX12_ROOT_SIGNATURE_DESC desc(4, params, 0, nullptr,
+                                   D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+  ComPtr<ID3DBlob> serialized;
+  ComPtr<ID3DBlob> error;
+  ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                            &serialized, &error));
+  ThrowIfFailed(device->CreateRootSignature(
+      0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
+      IID_PPV_ARGS(&mParticlesComputeRootSignature)));
+}
+
+void RenderingSystem::BuildParticlesRenderRootSignature(ID3D12Device* device) {
+  CD3DX12_ROOT_PARAMETER params[2];
+  params[0].InitAsShaderResourceView(0);
+  params[1].InitAsConstantBufferView(0);
+
+  CD3DX12_ROOT_SIGNATURE_DESC desc(
+      2, params, 0, nullptr,
+      D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+  ComPtr<ID3DBlob> serialized;
+  ComPtr<ID3DBlob> error;
+  ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                            &serialized, &error));
+  ThrowIfFailed(device->CreateRootSignature(
+      0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
+      IID_PPV_ARGS(&mParticlesRenderRootSignature)));
+}
+
 void RenderingSystem::BuildGeometryPSO(ID3D12Device* device) {
   D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
   pso.InputLayout = {mInputLayout.data(),
@@ -188,6 +265,278 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
       device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mComposePSO)));
 }
 
+void RenderingSystem::BuildParticlesEmitPSO(ID3D12Device* device) {
+  D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
+  desc.pRootSignature = mParticlesComputeRootSignature.Get();
+  desc.CS = {reinterpret_cast<BYTE*>(mParticlesEmitCS->GetBufferPointer()),
+             mParticlesEmitCS->GetBufferSize()};
+  ThrowIfFailed(device->CreateComputePipelineState(
+      &desc, IID_PPV_ARGS(&mParticlesEmitPSO)));
+}
+
+void RenderingSystem::BuildParticlesSimulatePSO(ID3D12Device* device) {
+  D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
+  desc.pRootSignature = mParticlesComputeRootSignature.Get();
+  desc.CS = {reinterpret_cast<BYTE*>(mParticlesSimulateCS->GetBufferPointer()),
+             mParticlesSimulateCS->GetBufferSize()};
+  ThrowIfFailed(device->CreateComputePipelineState(
+      &desc, IID_PPV_ARGS(&mParticlesSimulatePSO)));
+}
+
+void RenderingSystem::BuildParticlesInitPSO(ID3D12Device* device) {
+  D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
+  desc.pRootSignature = mParticlesComputeRootSignature.Get();
+  desc.CS = {reinterpret_cast<BYTE*>(mParticlesInitCS->GetBufferPointer()),
+             mParticlesInitCS->GetBufferSize()};
+  ThrowIfFailed(device->CreateComputePipelineState(
+      &desc, IID_PPV_ARGS(&mParticlesInitPSO)));
+}
+
+void RenderingSystem::BuildParticlesRenderPSO(ID3D12Device* device) {
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
+  pso.InputLayout = {nullptr, 0};
+  pso.pRootSignature = mParticlesRenderRootSignature.Get();
+  pso.VS = {reinterpret_cast<BYTE*>(mParticlesVS->GetBufferPointer()),
+            mParticlesVS->GetBufferSize()};
+  pso.GS = {reinterpret_cast<BYTE*>(mParticlesGS->GetBufferPointer()),
+            mParticlesGS->GetBufferSize()};
+  pso.PS = {reinterpret_cast<BYTE*>(mParticlesPS->GetBufferPointer()),
+            mParticlesPS->GetBufferSize()};
+
+  pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+  pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+  pso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+  pso.DepthStencilState.DepthEnable = true;
+  pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+  pso.SampleMask = UINT_MAX;
+  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+  pso.NumRenderTargets = 1;
+  pso.RTVFormats[0] = BackBufferFormat;
+  pso.DSVFormat = DepthStencilFormat;
+  pso.SampleDesc.Count = 1;
+
+  ThrowIfFailed(device->CreateGraphicsPipelineState(
+      &pso, IID_PPV_ARGS(&mParticlesRenderPSO)));
+}
+
+void RenderingSystem::BuildParticleResources(ID3D12Device* device,
+                                             ID3D12DescriptorHeap* cbvSrvHeap,
+                                             UINT cbvSrvDescriptorSize) {
+  const UINT particleStride = sizeof(ParticleGpuData);
+  const UINT deadListStride = sizeof(UINT);
+  const UINT particlePoolSize = kParticleMaxCount * particleStride;
+  const UINT deadListSize = kParticleMaxCount * deadListStride;
+
+  auto createDefaultBuffer =
+      [&](UINT64 size, D3D12_RESOURCE_STATES initialState,
+          D3D12_RESOURCE_FLAGS flags, ComPtr<ID3D12Resource>& buffer) {
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC bufferDesc =
+            CD3DX12_RESOURCE_DESC::Buffer(size, flags);
+        ThrowIfFailed(device->CreateCommittedResource(
+            &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc, initialState,
+            nullptr, IID_PPV_ARGS(&buffer)));
+      };
+
+  createDefaultBuffer(particlePoolSize, D3D12_RESOURCE_STATE_COMMON,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mParticlePoolBuffer);
+  createDefaultBuffer(deadListSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListABuffer);
+  createDefaultBuffer(deadListSize, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListBBuffer);
+  createDefaultBuffer(sizeof(UINT), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListACounterBuffer);
+  createDefaultBuffer(sizeof(UINT), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                      mDeadListBCounterBuffer);
+
+  const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+  const CD3DX12_RESOURCE_DESC simCbDesc =
+      CD3DX12_RESOURCE_DESC::Buffer(sizeof(ParticleSimConstants));
+  const CD3DX12_RESOURCE_DESC renderCbDesc =
+      CD3DX12_RESOURCE_DESC::Buffer(sizeof(ParticleRenderConstants));
+  ThrowIfFailed(device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &simCbDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&mParticleSimConstantBuffer)));
+  ThrowIfFailed(device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &renderCbDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&mParticleRenderConstantBuffer)));
+  const CD3DX12_RESOURCE_DESC counterResetDesc =
+      CD3DX12_RESOURCE_DESC::Buffer(sizeof(UINT));
+  ThrowIfFailed(device->CreateCommittedResource(
+      &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &counterResetDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&mParticleCounterResetBuffer)));
+  ThrowIfFailed(mParticleSimConstantBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mMappedParticleSimConstants)));
+  ThrowIfFailed(mParticleRenderConstantBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mMappedParticleRenderConstants)));
+  UINT* mappedCounterReset = nullptr;
+  ThrowIfFailed(mParticleCounterResetBuffer->Map(
+      0, nullptr, reinterpret_cast<void**>(&mappedCounterReset)));
+  mappedCounterReset[0] = 0u;
+  mParticleCounterResetBuffer->Unmap(0, nullptr);
+
+  CD3DX12_CPU_DESCRIPTOR_HANDLE cpuStart(
+      cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC particleSrvDesc = {};
+  particleSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+  particleSrvDesc.Shader4ComponentMapping =
+      D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  particleSrvDesc.Buffer.FirstElement = 0;
+  particleSrvDesc.Buffer.NumElements = kParticleMaxCount;
+  particleSrvDesc.Buffer.StructureByteStride = particleStride;
+  particleSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE particleSrvCpu(cpuStart, kParticlePoolSrvIndex,
+                                               cbvSrvDescriptorSize);
+  device->CreateShaderResourceView(mParticlePoolBuffer.Get(), &particleSrvDesc,
+                                   particleSrvCpu);
+
+  D3D12_UNORDERED_ACCESS_VIEW_DESC particlePoolUavDesc = {};
+  particlePoolUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+  particlePoolUavDesc.Buffer.FirstElement = 0;
+  particlePoolUavDesc.Buffer.NumElements = kParticleMaxCount;
+  particlePoolUavDesc.Buffer.StructureByteStride = particleStride;
+  particlePoolUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+  mParticlePoolUavCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+      cpuStart, kParticlePoolUavIndex, cbvSrvDescriptorSize);
+  mParticlePoolUavGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kParticlePoolUavIndex,
+      cbvSrvDescriptorSize);
+  device->CreateUnorderedAccessView(mParticlePoolBuffer.Get(), nullptr,
+                                    &particlePoolUavDesc,
+                                    mParticlePoolUavCpuHandle);
+
+  D3D12_UNORDERED_ACCESS_VIEW_DESC deadUavDesc = {};
+  deadUavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+  deadUavDesc.Buffer.FirstElement = 0;
+  deadUavDesc.Buffer.NumElements = kParticleMaxCount;
+  deadUavDesc.Buffer.StructureByteStride = deadListStride;
+  deadUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+  device->CreateUnorderedAccessView(
+      mDeadListABuffer.Get(), mDeadListACounterBuffer.Get(), &deadUavDesc,
+      CD3DX12_CPU_DESCRIPTOR_HANDLE(cpuStart, kDeadListAUavIndex,
+                                    cbvSrvDescriptorSize));
+  mDeadListAUavCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+      cpuStart, kDeadListAUavIndex, cbvSrvDescriptorSize);
+  mDeadListAUavGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kDeadListAUavIndex,
+      cbvSrvDescriptorSize);
+  device->CreateUnorderedAccessView(
+      mDeadListBBuffer.Get(), mDeadListBCounterBuffer.Get(), &deadUavDesc,
+      CD3DX12_CPU_DESCRIPTOR_HANDLE(cpuStart, kDeadListBUavIndex,
+                                    cbvSrvDescriptorSize));
+  mDeadListBUavCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+      cpuStart, kDeadListBUavIndex, cbvSrvDescriptorSize);
+  mDeadListBUavGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kDeadListBUavIndex,
+      cbvSrvDescriptorSize);
+}
+
+void RenderingSystem::SimulateParticles(
+    ID3D12GraphicsCommandList* cmdList, float deltaTime,
+    const DirectX::SimpleMath::Vector3& cameraPosition) {
+  mParticlesTotalTime += deltaTime;
+  mMappedParticleSimConstants->DeltaTime = deltaTime;
+  mMappedParticleSimConstants->TotalTime = mParticlesTotalTime;
+  mMappedParticleSimConstants->SpawnCount = 96;
+  mMappedParticleSimConstants->MaxParticles = kParticleMaxCount;
+  mMappedParticleSimConstants->EmitterPosition = cameraPosition;
+  mMappedParticleSimConstants->EmitterSpread = 8.0f;
+
+  auto appendDeadUavGpu =
+      mUseDeadListAAsConsume ? mDeadListBUavGpuHandle : mDeadListAUavGpuHandle;
+
+  auto toCompute = CD3DX12_RESOURCE_BARRIER::Transition(
+      mParticlePoolBuffer.Get(), mParticlePoolState,
+      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  cmdList->ResourceBarrier(1, &toCompute);
+  mParticlePoolState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+  auto resetCounter = [&](ID3D12Resource* counterBuffer) {
+    auto toCopyDest = CD3DX12_RESOURCE_BARRIER::Transition(
+        counterBuffer, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    cmdList->ResourceBarrier(1, &toCopyDest);
+    cmdList->CopyBufferRegion(
+        counterBuffer, 0, mParticleCounterResetBuffer.Get(), 0, sizeof(UINT));
+    auto toUav = CD3DX12_RESOURCE_BARRIER::Transition(
+        counterBuffer, D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cmdList->ResourceBarrier(1, &toUav);
+  };
+
+  if (!mParticlesInitialized) {
+    cmdList->SetPipelineState(mParticlesInitPSO.Get());
+    cmdList->SetComputeRootSignature(mParticlesComputeRootSignature.Get());
+    cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+    cmdList->SetComputeRootDescriptorTable(1, mDeadListAUavGpuHandle);
+    cmdList->SetComputeRootDescriptorTable(2, mDeadListAUavGpuHandle);
+    cmdList->SetComputeRootConstantBufferView(
+        3, mParticleSimConstantBuffer->GetGPUVirtualAddress());
+    resetCounter(mDeadListACounterBuffer.Get());
+    resetCounter(mDeadListBCounterBuffer.Get());
+    cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
+    auto initBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
+    cmdList->ResourceBarrier(1, &initBarrier);
+    mParticlesInitialized = true;
+    mUseDeadListAAsConsume = true;
+    appendDeadUavGpu = mDeadListBUavGpuHandle;
+  }
+
+  resetCounter(mUseDeadListAAsConsume ? mDeadListBCounterBuffer.Get()
+                                      : mDeadListACounterBuffer.Get());
+
+  cmdList->SetPipelineState(mParticlesEmitPSO.Get());
+  cmdList->SetComputeRootSignature(mParticlesComputeRootSignature.Get());
+  cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+  cmdList->SetComputeRootDescriptorTable(1, appendDeadUavGpu);
+  cmdList->SetComputeRootDescriptorTable(2, mUseDeadListAAsConsume
+                                                ? mDeadListAUavGpuHandle
+                                                : mDeadListBUavGpuHandle);
+  cmdList->SetComputeRootConstantBufferView(
+      3, mParticleSimConstantBuffer->GetGPUVirtualAddress());
+  cmdList->Dispatch((mMappedParticleSimConstants->SpawnCount + 63) / 64, 1, 1);
+
+  auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
+  cmdList->ResourceBarrier(1, &uavBarrier);
+
+  cmdList->SetPipelineState(mParticlesSimulatePSO.Get());
+  cmdList->SetComputeRootDescriptorTable(0, mParticlePoolUavGpuHandle);
+  cmdList->SetComputeRootDescriptorTable(1, appendDeadUavGpu);
+  cmdList->SetComputeRootDescriptorTable(2, mUseDeadListAAsConsume
+                                                ? mDeadListAUavGpuHandle
+                                                : mDeadListBUavGpuHandle);
+  cmdList->Dispatch((kParticleMaxCount + 127) / 128, 1, 1);
+  cmdList->ResourceBarrier(1, &uavBarrier);
+
+  auto toRender = CD3DX12_RESOURCE_BARRIER::Transition(
+      mParticlePoolBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  cmdList->ResourceBarrier(1, &toRender);
+  mParticlePoolState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+  mUseDeadListAAsConsume = !mUseDeadListAAsConsume;
+}
+
+void RenderingSystem::RenderParticles(ID3D12GraphicsCommandList* cmdList) {
+  cmdList->SetPipelineState(mParticlesRenderPSO.Get());
+  cmdList->SetGraphicsRootSignature(mParticlesRenderRootSignature.Get());
+  cmdList->SetGraphicsRootShaderResourceView(
+      0, mParticlePoolBuffer->GetGPUVirtualAddress());
+  cmdList->SetGraphicsRootConstantBufferView(
+      1, mParticleRenderConstantBuffer->GetGPUVirtualAddress());
+  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+  cmdList->DrawInstanced(kParticleMaxCount, 1, 0, 0);
+}
+
 void RenderingSystem::Render(
     ID3D12GraphicsCommandList* cmdList,
     D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv, ID3D12Resource* backBuffer,
@@ -201,13 +550,20 @@ void RenderingSystem::Render(
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
-    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+    const DirectX::SimpleMath::Matrix& viewProj,
     const DirectX::SimpleMath::Vector3& cameraPosition) {
   cmdList->RSSetViewports(1, &viewport);
   cmdList->RSSetScissorRects(1, &scissorRect);
 
   ID3D12DescriptorHeap* heaps[] = {cbvSrvHeap, samplerHeap};
   cmdList->SetDescriptorHeaps(2, heaps);
+  mMappedParticleRenderConstants->CameraPosition = cameraPosition;
+  mMappedParticleRenderConstants->BillboardSize = 0.55f;
+  mMappedParticleRenderConstants->MaxParticles = kParticleMaxCount;
+  mMappedParticleRenderConstants->ViewProj = viewProj.Transpose();
+
+  SimulateParticles(cmdList, deltaTime, cameraPosition);
 
   cmdList->SetPipelineState(mGeometryPSO.Get());
   cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
@@ -346,6 +702,9 @@ void RenderingSystem::Render(
   cmdList->SetGraphicsRootConstantBufferView(2, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
+
+  cmdList->OMSetRenderTargets(1, &backBufferRtv, true, &dsvHandle);
+  RenderParticles(cmdList);
 
   auto depthToWrite = CD3DX12_RESOURCE_BARRIER::Transition(
       depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
