@@ -1344,6 +1344,14 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
+  const auto lightDir = DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
+  const auto lightPos = mCamPos - lightDir * 180.0f;
+  const auto lightView = DirectX::SimpleMath::Matrix::CreateLookAt(
+      lightPos, mCamPos, DirectX::SimpleMath::Vector3::Up);
+  const auto lightProj = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
+      -180.0f, 180.0f, -180.0f, 180.0f, 1.0f, 500.0f);
+  composeConstants.ShadowViewProj = (lightView * lightProj).Transpose();
+  composeConstants.ShadowParams = DirectX::SimpleMath::Vector4(0.0012f, 2048.0f, 0.0f, 0.0f);
   constexpr size_t kStaticLightCount = 3;
   static_assert(
       kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
@@ -1452,7 +1460,8 @@ void BoxApp::Draw(const GameTimer& gt) {
       mModelGeometry, mSceneObjects, mSubmeshInstances,
       mVisibleSubmeshInstanceIndices, mMaterialCB.get(),
       mDepthStencilBuffer.Get(), mComposeCB->Resource()->GetGPUVirtualAddress(),
-      gt.DeltaTime(), mView * mProj, mCamPos);
+      gt.DeltaTime(), mView * mProj, mCamPos,
+      DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f));
 
   ThrowIfFailed(mCommandList->Close());
 

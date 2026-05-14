@@ -11,8 +11,9 @@ class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
   static constexpr UINT kGBufferSrvStart = 2;
-  static constexpr UINT kObjectCbvStart = 5;
+  static constexpr UINT kObjectCbvStart = 6;
   static constexpr UINT kObjectCbvReservedCount = 128;
+  static constexpr UINT kShadowMapSrvIndex = kGBufferSrvStart + 3;
   static constexpr UINT kDepthSrvIndex =
       kObjectCbvStart + kObjectCbvReservedCount;
   static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
@@ -39,7 +40,8 @@ class RenderingSystem {
               ID3D12Resource* depthBuffer,
               D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
               const DirectX::SimpleMath::Matrix& viewProj,
-              const DirectX::SimpleMath::Vector3& cameraPosition);
+              const DirectX::SimpleMath::Vector3& cameraPosition,
+              const DirectX::SimpleMath::Vector3& directionalLightDirection);
 
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
@@ -48,6 +50,11 @@ class RenderingSystem {
   void BuildParticlesRenderRootSignature(ID3D12Device* device);
   void BuildGeometryPSO(ID3D12Device* device);
   void BuildComposePSO(ID3D12Device* device);
+  void BuildShadowRootSignature(ID3D12Device* device);
+  void BuildShadowPSO(ID3D12Device* device);
+  void BuildShadowResources(ID3D12Device* device,
+      ID3D12DescriptorHeap* cbvSrvHeap,
+      UINT cbvSrvDescriptorSize);
   void BuildParticlesEmitPSO(ID3D12Device* device);
   void BuildParticlesSimulatePSO(ID3D12Device* device);
   void BuildParticlesInitPSO(ID3D12Device* device);
@@ -67,6 +74,8 @@ class RenderingSystem {
   ComPtr<ID3D12RootSignature> mParticlesRenderRootSignature;
   ComPtr<ID3D12PipelineState> mGeometryPSO;
   ComPtr<ID3D12PipelineState> mComposePSO;
+  ComPtr<ID3D12RootSignature> mShadowRootSignature;
+  ComPtr<ID3D12PipelineState> mShadowPSO;
   ComPtr<ID3D12PipelineState> mParticlesEmitPSO;
   ComPtr<ID3D12PipelineState> mParticlesSimulatePSO;
   ComPtr<ID3D12PipelineState> mParticlesInitPSO;
@@ -78,6 +87,7 @@ class RenderingSystem {
   ComPtr<ID3DBlob> mGeometryDS;
   ComPtr<ID3DBlob> mComposeVS;
   ComPtr<ID3DBlob> mComposePS;
+  ComPtr<ID3DBlob> mShadowVS;
   ComPtr<ID3DBlob> mParticlesEmitCS;
   ComPtr<ID3DBlob> mParticlesInitCS;
   ComPtr<ID3DBlob> mParticlesSimulateCS;
@@ -146,4 +156,14 @@ class RenderingSystem {
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListBUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mParticlePoolUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mCbvSrvHeapGpuStart = {};
+  struct ShadowConstants {
+      DirectX::SimpleMath::Matrix ShadowViewProj;
+  };
+
+  static constexpr UINT kShadowMapSize = 2048;
+  ComPtr<ID3D12Resource> mShadowMap;
+  ComPtr<ID3D12Resource> mShadowConstantBuffer;
+  ShadowConstants* mMappedShadowConstants = nullptr;
+  ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
+  D3D12_CPU_DESCRIPTOR_HANDLE mShadowDsv = {};
 };

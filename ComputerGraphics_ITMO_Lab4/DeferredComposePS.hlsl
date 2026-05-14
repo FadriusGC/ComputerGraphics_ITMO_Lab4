@@ -6,12 +6,13 @@ struct PS_INPUT {
 Texture2D gAlbedo : register(t0);
 Texture2D gNormal : register(t1);
 Texture2D gDepth : register(t2);
+Texture2D gShadowMap : register(t3);
 SamplerState gSampler : register(s0);
 
 static const uint LIGHT_TYPE_POINT = 0;
 static const uint LIGHT_TYPE_DIRECTIONAL = 1;
 static const uint LIGHT_TYPE_SPOT = 2;
-static const uint MAX_LIGHTS = 8;
+static const uint MAX_LIGHTS = 100;
 
 struct GpuLight {
     float4 PositionWorldAndRange;
@@ -24,6 +25,8 @@ cbuffer cbCompose : register(b0) {
     float4x4 gInvViewProj;
     float4 gCameraPosition;
     float4 gScreenSize;
+    float4x4 gShadowViewProj;
+    float4 gShadowParams;
     float4 gLightCount;
     GpuLight gLights[MAX_LIGHTS];
 };
@@ -74,6 +77,16 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     return diffuse + specular;
 }
 
+float ComputeShadow(float3 worldPos) {
+    float4 lightClip = mul(float4(worldPos, 1.0f), gShadowViewProj);
+    float3 ndc = lightClip.xyz / max(lightClip.w, 1e-6f);
+    float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f) return 1.0f;
+    float storedDepth = gShadowMap.Sample(gSampler, uv).r;
+    float currentDepth = ndc.z - gShadowParams.x;
+    return currentDepth <= storedDepth ? 1.0f : 0.25f;
+}
+
 float4 PS(PS_INPUT input) : SV_Target {
     float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
     float4 normalSample = gNormal.Sample(gSampler, input.TexC);
@@ -91,7 +104,8 @@ float4 PS(PS_INPUT input) : SV_Target {
     [loop]
     for (uint i = 0; i < lightCount; ++i) {
         uint lightType = (uint)gLights[i].DirectionAndType.w;
-        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness);
+        float shadow = (lightType == LIGHT_TYPE_DIRECTIONAL) ? ComputeShadow(worldPos) : 1.0f;
+        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness) * shadow;
     }
 
     return float4(saturate(color), albedo.a);
