@@ -127,6 +127,7 @@ class BoxApp {
   std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
   std::unique_ptr<UploadBuffer<ComposeConstants>> mComposeCB;
+  std::unique_ptr<UploadBuffer<DirectX::SimpleMath::Matrix>> mShadowMatricesCB;
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
   // Вектор всех загруженных текстур

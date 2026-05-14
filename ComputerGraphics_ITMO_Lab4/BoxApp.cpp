@@ -210,6 +210,9 @@ void BoxApp::BuildConstantBuffers() {
       new UploadBuffer<LightConstants>(mDevice.Get(), 1, true));
   mComposeCB = std::unique_ptr<UploadBuffer<ComposeConstants>>(
       new UploadBuffer<ComposeConstants>(mDevice.Get(), 1, true));
+  mShadowMatricesCB =
+      std::unique_ptr<UploadBuffer<DirectX::SimpleMath::Matrix>>(
+          new UploadBuffer<DirectX::SimpleMath::Matrix>(mDevice.Get(), 3, true));
 }
 
 void BoxApp::BuildRootSignature() {
@@ -1380,7 +1383,7 @@ void BoxApp::Update(const GameTimer& gt) {
         fallingLight.Intensity);
   }
 
-  const size_t directionalLightIndex = 0;
+  const size_t directionalLightIndex = mFallingLights.size();
   const size_t firstSpotLightIndex = directionalLightIndex + 1;
   const size_t secondSpotLightIndex = directionalLightIndex + 2;
   // Directional: солнце типо
@@ -1425,6 +1428,9 @@ void BoxApp::Update(const GameTimer& gt) {
   }
 
   mComposeCB->CopyData(0, composeConstants);
+  for (int c = 0; c < 3; ++c) {
+      mShadowMatricesCB->CopyData(c, composeConstants.LightViewProj[c]);
+  }
 
   static float time = 0.0f;
   time += gt.DeltaTime();
@@ -1468,7 +1474,8 @@ void BoxApp::Draw(const GameTimer& gt) {
       mModelGeometry, mSceneObjects, mSubmeshInstances,
       mVisibleSubmeshInstanceIndices, mMaterialCB.get(),
       mDepthStencilBuffer.Get(), mComposeCB->Resource()->GetGPUVirtualAddress(),
-      gt.DeltaTime(), mView * mProj, mCamPos);
+      mShadowMatricesCB->Resource()->GetGPUVirtualAddress(), gt.DeltaTime(),
+      mView * mProj, mCamPos);
 
   ThrowIfFailed(mCommandList->Close());
 

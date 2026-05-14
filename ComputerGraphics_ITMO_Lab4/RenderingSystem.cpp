@@ -639,7 +639,8 @@ void RenderingSystem::Render(
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
-    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+    D3D12_GPU_VIRTUAL_ADDRESS shadowMatricesAddress, float deltaTime,
     const DirectX::SimpleMath::Matrix& viewProj,
     const DirectX::SimpleMath::Vector3& cameraPosition) {
   cmdList->RSSetViewports(1, &viewport);
@@ -658,6 +659,11 @@ void RenderingSystem::Render(
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);
 
+  D3D12_VIEWPORT shadowViewport = { 0.0f, 0.0f, static_cast<float>(kShadowMapSize), static_cast<float>(kShadowMapSize), 0.0f, 1.0f };
+  D3D12_RECT shadowScissor = { 0, 0, static_cast<LONG>(kShadowMapSize), static_cast<LONG>(kShadowMapSize) };
+  cmdList->RSSetViewports(1, &shadowViewport);
+  cmdList->RSSetScissorRects(1, &shadowScissor);
+
   auto shadowToWrite = CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
   cmdList->ResourceBarrier(1, &shadowToWrite);
   cmdList->SetPipelineState(mShadowPSO.Get());
@@ -672,13 +678,17 @@ void RenderingSystem::Render(
           const SubmeshInstance& submeshInstance = submeshInstances[visibleInstanceIndex];
           CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), static_cast<INT>(kObjectCbvStart + submeshInstance.ObjectIndex), cbvSrvDescriptorSize);
           cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
-          cmdList->SetGraphicsRootConstantBufferView(1, composeCBAddress + offsetof(ComposeConstants, LightViewProj) + sizeof(DirectX::SimpleMath::Matrix) * c);
+          constexpr UINT kShadowMatrixCBStride = (sizeof(DirectX::SimpleMath::Matrix) + 255) & ~255;
+          cmdList->SetGraphicsRootConstantBufferView(1, shadowMatricesAddress + kShadowMatrixCBStride * c);
           const auto& submesh = modelGeometry.Submeshes[submeshInstance.SubmeshIndex];
           cmdList->DrawIndexedInstanced(submesh.IndexCount, 1, submesh.StartIndexLocation, 0, 0);
       }
   }
   auto shadowToSrv = CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   cmdList->ResourceBarrier(1, &shadowToSrv);
+
+  cmdList->RSSetViewports(1, &viewport);
+  cmdList->RSSetScissorRects(1, &scissorRect);
 
   cmdList->SetPipelineState(mGeometryPSO.Get());
   cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());

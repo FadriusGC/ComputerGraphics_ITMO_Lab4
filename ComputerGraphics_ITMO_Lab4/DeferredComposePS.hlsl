@@ -11,8 +11,8 @@ SamplerState gSampler : register(s0);
 SamplerComparisonState gShadowCmp : register(s1);
 
 #define MAX_LIGHTS 64
-#define LIGHT_TYPE_DIRECTIONAL 0
-#define LIGHT_TYPE_POINT 1
+#define LIGHT_TYPE_POINT 0
+#define LIGHT_TYPE_DIRECTIONAL 1
 #define LIGHT_TYPE_SPOT 2
 
 struct GpuLight {
@@ -41,8 +41,8 @@ float3 ReconstructWorldPos(float2 uv, float depth) {
 }
 
 float ComputeShadowCSM(float3 worldPos, float3 normal, float3 lightDir) {
-    float3 viewPos = worldPos - gCameraPosition.xyz;
-    float z = length(viewPos);
+    float3 viewVec = worldPos - gCameraPosition.xyz;
+    float z = abs(dot(viewVec, normalize(gCameraForward.xyz)));
 
     int cascade = (z < gCascadeSplits.x)
                       ? 0
@@ -59,8 +59,8 @@ float ComputeShadowCSM(float3 worldPos, float3 normal, float3 lightDir) {
     }
 
     float ndotl = saturate(dot(normal, -lightDir));
-    float bias = max(0.0015f * (1.0f - ndotl), 0.0005f);
-    float2 texel = 1.0f / float2(2048.0f, 2048.0f);
+    float bias = max(0.0035f * (1.0f - ndotl), 0.0010f);
+    float2 texel = gShadowTexelSize.xy;
 
     float visibility = 0.0f;
     [unroll]
@@ -76,7 +76,7 @@ float ComputeShadowCSM(float3 worldPos, float3 normal, float3 lightDir) {
     return visibility / 9.0f;
 }
 
-float EvaluateLight(
+float3 EvaluateLight(
     uint type,
     GpuLight light,
     float3 worldPos,
@@ -93,7 +93,7 @@ float EvaluateLight(
         float distanceToLight = length(toLight);
 
         if (distanceToLight <= 1e-4f) {
-            return 0.0f;
+            return 0.0f.xxx;
         }
 
         lightDir = toLight / distanceToLight;
@@ -122,8 +122,7 @@ float EvaluateLight(
 
     float3 lightColor =
         light.ColorAndIntensity.rgb * light.ColorAndIntensity.w;
-    return (ndotl + specular) * attenuation * shadow *
-           dot(lightColor, float3(0.3333f, 0.3333f, 0.3333f));
+     return (ndotl + specular) * attenuation * shadow * lightColor;
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
@@ -149,5 +148,6 @@ float4 PS(PS_INPUT input) : SV_Target {
             roughness);
     }
 
+    color = color / (1.0f + color);
     return float4(saturate(color), albedo.a);
 }
