@@ -97,6 +97,7 @@ class RenderingSystem {
   static constexpr UINT kCascadeCount = 3;
   static constexpr UINT kShadowMapSize = 2048;
   ComPtr<ID3D12Resource> mShadowMap;
+  ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
   D3D12_CPU_DESCRIPTOR_HANDLE mShadowDsv[kCascadeCount] = {};
 
   struct ParticleGpuData {

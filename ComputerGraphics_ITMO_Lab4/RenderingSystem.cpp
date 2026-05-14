@@ -349,18 +349,59 @@ void RenderingSystem::BuildParticlesRenderPSO(ID3D12Device* device) {
   ThrowIfFailed(device->CreateGraphicsPipelineState(
       &pso, IID_PPV_ARGS(&mParticlesRenderPSO)));
 }
-void RenderingSystem::BuildShadowResources(ID3D12Device* device, ID3D12DescriptorHeap* cbvSrvHeap, UINT cbvSrvDescriptorSize) {
-    D3D12_CLEAR_VALUE clearValue = {}; clearValue.Format = DXGI_FORMAT_D32_FLOAT; clearValue.DepthStencil.Depth = 1.0f;
-    auto desc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R32_TYPELESS, kShadowMapSize, kShadowMapSize, kCascadeCount, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-    auto heap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-    ThrowIfFailed(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue, IID_PPV_ARGS(&mShadowMap)));
-    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {}; dsvHeapDesc.NumDescriptors = kCascadeCount; dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-    ComPtr<ID3D12DescriptorHeap> dsvHeap; ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dsvHeap)));
-    UINT dsvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-    for (UINT i = 0; i < kCascadeCount; i++) { mShadowDsv[i] = CD3DX12_CPU_DESCRIPTOR_HANDLE(dsvHeap->GetCPUDescriptorHandleForHeapStart(), i, dsvSize); D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {}; dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY; dsv.Format = DXGI_FORMAT_D32_FLOAT; dsv.Texture2DArray.ArraySize = 1; dsv.Texture2DArray.FirstArraySlice = i; device->CreateDepthStencilView(mShadowMap.Get(), &dsv, mShadowDsv[i]); }
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {}; srv.Format = DXGI_FORMAT_R32_FLOAT; srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY; srv.Texture2DArray.ArraySize = kCascadeCount; srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    CD3DX12_CPU_DESCRIPTOR_HANDLE cpu(cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), kShadowMapSrvIndex, cbvSrvDescriptorSize);
-    device->CreateShaderResourceView(mShadowMap.Get(), &srv, cpu);
+void RenderingSystem::BuildShadowResources(ID3D12Device* device,
+    ID3D12DescriptorHeap* cbvSrvHeap,
+    UINT cbvSrvDescriptorSize) {
+    D3D12_CLEAR_VALUE clearValue = {};
+    clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+    clearValue.DepthStencil.Depth = 1.0f;
+
+    const CD3DX12_RESOURCE_DESC shadowMapDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R32_TYPELESS, kShadowMapSize, kShadowMapSize, kCascadeCount,
+        1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &shadowMapDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue,
+        IID_PPV_ARGS(&mShadowMap)));
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = kCascadeCount;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    ThrowIfFailed(
+        device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mShadowDsvHeap)));
+
+    const UINT dsvDescriptorSize =
+        device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    for (UINT cascadeIndex = 0; cascadeIndex < kCascadeCount; ++cascadeIndex) {
+        mShadowDsv[cascadeIndex] = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+            mShadowDsvHeap->GetCPUDescriptorHandleForHeapStart(), cascadeIndex,
+            dsvDescriptorSize);
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.Texture2DArray.ArraySize = 1;
+        dsvDesc.Texture2DArray.FirstArraySlice = cascadeIndex;
+        device->CreateDepthStencilView(mShadowMap.Get(), &dsvDesc,
+            mShadowDsv[cascadeIndex]);
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2DArray.MostDetailedMip = 0;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.FirstArraySlice = 0;
+    srvDesc.Texture2DArray.ArraySize = kCascadeCount;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE shadowSrvCpuHandle(
+        cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), kShadowMapSrvIndex,
+        cbvSrvDescriptorSize);
+    device->CreateShaderResourceView(mShadowMap.Get(), &srvDesc,
+        shadowSrvCpuHandle);
 }
 
 void RenderingSystem::BuildParticleResources(ID3D12Device* device,
