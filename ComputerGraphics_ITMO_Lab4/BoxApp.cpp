@@ -1415,8 +1415,11 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.Lights[secondSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
   {
-      DirectX::SimpleMath::Vector3 lightDir =
-          DirectX::SimpleMath::Vector3(0.35f, 1.0f, -0.1f);
+      const DirectX::SimpleMath::Vector3 directionalLightDir(
+          composeConstants.Lights[directionalLightIndex].DirectionAndType.x,
+          composeConstants.Lights[directionalLightIndex].DirectionAndType.y,
+          composeConstants.Lights[directionalLightIndex].DirectionAndType.z);
+      DirectX::SimpleMath::Vector3 lightDir = directionalLightDir;
       lightDir.Normalize();
       const float splits[4] = { 0.1f, composeConstants.CascadeSplits.x,
                                composeConstants.CascadeSplits.y,
@@ -1495,9 +1498,18 @@ void BoxApp::Update(const GameTimer& gt) {
               maxZ = std::max(maxZ, ls.z);
           }
 
-          const float zPadding = 80.0f;
+          const float zPadding = 120.0f;
           minZ -= zPadding;
           maxZ += zPadding;
+
+          const float cascadeWidth = maxX - minX;
+          const float cascadeHeight = maxY - minY;
+          const float texelSizeX = cascadeWidth / 2048.0f;
+          const float texelSizeY = cascadeHeight / 2048.0f;
+          minX = std::floor(minX / texelSizeX) * texelSizeX;
+          minY = std::floor(minY / texelSizeY) * texelSizeY;
+          maxX = std::floor(maxX / texelSizeX) * texelSizeX;
+          maxY = std::floor(maxY / texelSizeY) * texelSizeY;
 
           const auto lightProj = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
               minX, maxX, minY, maxY, minZ, maxZ);

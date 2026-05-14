@@ -687,8 +687,11 @@ void RenderingSystem::Render(
   for (UINT c = 0; c < kCascadeCount; ++c) {
       cmdList->ClearDepthStencilView(mShadowDsv[c], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
       cmdList->OMSetRenderTargets(0, nullptr, false, &mShadowDsv[c]);
-      for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
-          const SubmeshInstance& submeshInstance = submeshInstances[visibleInstanceIndex];
+      for (const SubmeshInstance& submeshInstance : submeshInstances) {
+          if (submeshInstance.ObjectIndex >= sceneObjects.size() ||
+              submeshInstance.SubmeshIndex >= modelGeometry.Submeshes.size()) {
+              continue;
+          }
           CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), static_cast<INT>(kObjectCbvStart + submeshInstance.ObjectIndex), cbvSrvDescriptorSize);
           cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
           constexpr UINT kShadowMatrixCBStride = (sizeof(DirectX::SimpleMath::Matrix) + 255) & ~255;

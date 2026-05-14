@@ -51,7 +51,6 @@ float ComputeShadowCSM(float3 worldPos, float3 normal, float3 lightDir) {
     float4 lightClip = mul(float4(worldPos, 1.0f), gLightViewProj[cascade]);
     float3 shadowTex = lightClip.xyz / lightClip.w;
     shadowTex.xy = shadowTex.xy * 0.5f + 0.5f;
-    shadowTex.y = 1.0f - shadowTex.y;
 
     if (shadowTex.x < 0.0f || shadowTex.x > 1.0f || shadowTex.y < 0.0f ||
         shadowTex.y > 1.0f || shadowTex.z < 0.0f || shadowTex.z > 1.0f) {
