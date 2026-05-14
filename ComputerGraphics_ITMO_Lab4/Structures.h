@@ -84,10 +84,14 @@ struct GpuLight {
 
 struct ComposeConstants {
   static constexpr int kMaxLights = 100;
+  static constexpr int kCascadeCount = 4;
 
   DirectX::SimpleMath::Matrix InvViewProj;
   DirectX::SimpleMath::Vector4 CameraPosition;
   DirectX::SimpleMath::Vector4 ScreenSize;
   DirectX::SimpleMath::Vector4 LightCount;
+  DirectX::SimpleMath::Vector4 CascadeSplits;
+  DirectX::SimpleMath::Vector4 ShadowSettings;  // x: enable, y: pcfRadius
+  DirectX::SimpleMath::Matrix LightViewProj[kCascadeCount];
   GpuLight Lights[kMaxLights];
 };

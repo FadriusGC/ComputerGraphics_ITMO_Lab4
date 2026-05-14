@@ -1344,6 +1344,15 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
+  composeConstants.CascadeSplits =
+      DirectX::SimpleMath::Vector4(20.0f, 60.0f, 180.0f, 500.0f);
+  composeConstants.ShadowSettings =
+      DirectX::SimpleMath::Vector4(1.0f, 2.0f, 0.0f, 0.0f);
+  for (int cascadeIndex = 0;
+      cascadeIndex < ComposeConstants::kCascadeCount; ++cascadeIndex) {
+      composeConstants.LightViewProj[cascadeIndex] =
+          DirectX::SimpleMath::Matrix::Identity.Transpose();
+  }
   constexpr size_t kStaticLightCount = 3;
   static_assert(
       kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,

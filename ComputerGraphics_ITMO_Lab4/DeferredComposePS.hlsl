@@ -11,7 +11,7 @@ SamplerState gSampler : register(s0);
 static const uint LIGHT_TYPE_POINT = 0;
 static const uint LIGHT_TYPE_DIRECTIONAL = 1;
 static const uint LIGHT_TYPE_SPOT = 2;
-static const uint MAX_LIGHTS = 8;
+static const uint MAX_LIGHTS = 100;
 
 struct GpuLight {
     float4 PositionWorldAndRange;
@@ -25,6 +25,9 @@ cbuffer cbCompose : register(b0) {
     float4 gCameraPosition;
     float4 gScreenSize;
     float4 gLightCount;
+    float4 gCascadeSplits;
+    float4 gShadowSettings;
+    float4x4 gLightViewProj[4];
     GpuLight gLights[MAX_LIGHTS];
 };
 
@@ -34,7 +37,39 @@ float3 ReconstructWorldPos(float2 uv, float depth) {
     return worldPos.xyz / max(worldPos.w, 1e-6f);
 }
 
-float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir, float roughness) {
+uint GetCascadeIndex(float viewDepth) {
+    if (viewDepth < gCascadeSplits.x) return 0;
+    if (viewDepth < gCascadeSplits.y) return 1;
+    if (viewDepth < gCascadeSplits.z) return 2;
+    return 3;
+}
+
+float ComputeDirectionalShadowPCF(float2 uv, float receiverDepth, float3 normal, float3 L, float viewDepth) {
+    if (gShadowSettings.x < 0.5f) return 1.0f;
+
+    uint cascade = GetCascadeIndex(viewDepth);
+    float cascadeScale = 1.0f + cascade * 0.65f;
+    int pcfRadius = max(1, (int)gShadowSettings.y);
+    float2 texel = gScreenSize.zw * cascadeScale;
+    float bias = max(0.0003f, 0.0020f * (1.0f - saturate(dot(normal, L))));
+
+    float sum = 0.0f;
+    float taps = 0.0f;
+    [loop]
+    for (int y = -pcfRadius; y <= pcfRadius; ++y) {
+        [loop]
+        for (int x = -pcfRadius; x <= pcfRadius; ++x) {
+            float sampleDepth = gDepth.Sample(gSampler, uv + float2(x, y) * texel).r;
+            float occ = (sampleDepth + bias < receiverDepth) ? 0.0f : 1.0f;
+            sum += occ;
+            taps += 1.0f;
+        }
+    }
+
+    return sum / max(taps, 1.0f);
+}
+
+float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir, float roughness, float2 uv, float depth, float viewDepth) {
     float3 radiance = light.ColorAndIntensity.rgb * light.ColorAndIntensity.a;
     float3 L = 0.0f;
     float attenuation = 1.0f;
@@ -62,13 +97,18 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
         }
     }
 
+    float shadow = 1.0f;
+    if (lightType == LIGHT_TYPE_DIRECTIONAL) {
+        shadow = ComputeDirectionalShadowPCF(uv, depth, normal, L, viewDepth);
+    }
+
     float NdotL = saturate(dot(normal, L));
-    float3 diffuse = radiance * NdotL * attenuation;
+    float3 diffuse = radiance * NdotL * attenuation * shadow;
 
     float3 halfVec = normalize(L + viewDir);
     float specPower = lerp(64.0f, 4.0f, saturate(roughness));
     float specStrength = lerp(0.25f, 0.04f, saturate(roughness));
-    float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation;
+    float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation * shadow;
     float3 specular = radiance * spec * specStrength;
 
     return diffuse + specular;
@@ -84,6 +124,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     float roughness = saturate(normalSample.a);
     float3 worldPos = ReconstructWorldPos(input.TexC, depth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
+    float viewDepth = length(gCameraPosition.xyz - worldPos);
 
     float3 color = albedo.rgb * 0.05f;
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
@@ -91,7 +132,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     [loop]
     for (uint i = 0; i < lightCount; ++i) {
         uint lightType = (uint)gLights[i].DirectionAndType.w;
-        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness);
+        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness, input.TexC, depth, viewDepth);
     }
 
     return float4(saturate(color), albedo.a);
