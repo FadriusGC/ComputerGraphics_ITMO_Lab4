@@ -141,16 +141,25 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
-    CD3DX12_ROOT_PARAMETER params[2];
-    CD3DX12_DESCRIPTOR_RANGE srvTable;
-    srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
-    params[0].InitAsDescriptorTable(1, &srvTable);
-    params[1].InitAsConstantBufferView(0);
+    CD3DX12_ROOT_PARAMETER params[5];
+    CD3DX12_DESCRIPTOR_RANGE albedoSrvTable;
+    albedoSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+    params[0].InitAsDescriptorTable(1, &albedoSrvTable);
+    CD3DX12_DESCRIPTOR_RANGE normalSrvTable;
+    normalSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
+    params[1].InitAsDescriptorTable(1, &normalSrvTable);
+    CD3DX12_DESCRIPTOR_RANGE depthSrvTable;
+    depthSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2);
+    params[2].InitAsDescriptorTable(1, &depthSrvTable);
+    CD3DX12_DESCRIPTOR_RANGE shadowSrvTable;
+    shadowSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3);
+    params[3].InitAsDescriptorTable(1, &shadowSrvTable);
+    params[4].InitAsConstantBufferView(0);
     CD3DX12_STATIC_SAMPLER_DESC linearSampler(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
     CD3DX12_STATIC_SAMPLER_DESC shadowSampler(1, D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
         D3D12_TEXTURE_ADDRESS_MODE_BORDER, D3D12_TEXTURE_ADDRESS_MODE_BORDER, D3D12_TEXTURE_ADDRESS_MODE_BORDER,
         0.0f, 16, D3D12_COMPARISON_FUNC_LESS_EQUAL, D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
-    CD3DX12_ROOT_SIGNATURE_DESC desc(2, params, 2, &linearSampler,
+    CD3DX12_ROOT_SIGNATURE_DESC desc(5, params, 2, &linearSampler,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     desc.pStaticSamplers = &linearSampler;
     D3D12_STATIC_SAMPLER_DESC samplers[2] = { linearSampler, shadowSampler };
@@ -286,6 +295,10 @@ void RenderingSystem::BuildShadowPSO(ID3D12Device* device) {
     pso.pRootSignature = mShadowRootSignature.Get();
     pso.VS = { reinterpret_cast<BYTE*>(mShadowVS->GetBufferPointer()), mShadowVS->GetBufferSize() };
     pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    pso.RasterizerState.DepthBias = 1200;
+    pso.RasterizerState.DepthBiasClamp = 0.0f;
+    pso.RasterizerState.SlopeScaledDepthBias = 1.75f;
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
     pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     pso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     pso.SampleMask = UINT_MAX;
@@ -823,9 +836,22 @@ void RenderingSystem::Render(
   cmdList->SetGraphicsRootSignature(mComposeRootSignature.Get());
   CD3DX12_GPU_DESCRIPTOR_HANDLE composeSrvTable(cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kGBufferSrvStart, cbvSrvDescriptorSize);
   cmdList->SetGraphicsRootDescriptorTable(0, composeSrvTable);
-  CD3DX12_GPU_DESCRIPTOR_HANDLE composeSrv(mGBuffer.GetSrvStartGpuHandle());
-  cmdList->SetGraphicsRootDescriptorTable(0, composeSrv);
-  cmdList->SetGraphicsRootConstantBufferView(1, composeCBAddress);
+
+  CD3DX12_GPU_DESCRIPTOR_HANDLE normalSrv(composeSrvTable, 1,
+      cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(1, normalSrv);
+
+  CD3DX12_GPU_DESCRIPTOR_HANDLE depthSrv(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kDepthSrvIndex,
+      cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(2, depthSrv);
+
+  CD3DX12_GPU_DESCRIPTOR_HANDLE shadowSrv(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kShadowMapSrvIndex,
+      cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(3, shadowSrv);
+
+  cmdList->SetGraphicsRootConstantBufferView(4, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
 
