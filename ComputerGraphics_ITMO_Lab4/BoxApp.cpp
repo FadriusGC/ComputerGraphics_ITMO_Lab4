@@ -1344,6 +1344,9 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
+  composeConstants.CameraForward = DirectX::SimpleMath::Vector4(lookDir.x, lookDir.y, lookDir.z, 0.0f);
+  composeConstants.CascadeSplits = DirectX::SimpleMath::Vector4(25.0f, 80.0f, 180.0f, 0.0f);
+  composeConstants.ShadowTexelSize = DirectX::SimpleMath::Vector4(1.0f / 2048.0f, 1.0f / 2048.0f, 0.0f, 0.0f);
   constexpr size_t kStaticLightCount = 3;
   static_assert(
       kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
@@ -1407,6 +1410,19 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 111.8f);
   composeConstants.Lights[secondSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
+  {
+      const DirectX::SimpleMath::Vector3 lightDir = DirectX::SimpleMath::Vector3(0.35f, 1.0f, -0.1f);
+      const float splits[4] = { 1.0f, 25.0f, 80.0f, 180.0f };
+      for (int c = 0; c < 3; ++c) {
+          float zMid = 0.5f * (splits[c] + splits[c + 1]);
+          DirectX::SimpleMath::Vector3 center = mCamPos + lookDir * zMid;
+          DirectX::SimpleMath::Vector3 eye = center + lightDir * 120.0f;
+          auto lv = DirectX::SimpleMath::Matrix::CreateLookAt(eye, center, DirectX::SimpleMath::Vector3::Up);
+          float extent = splits[c + 1];
+          auto lp = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(-extent, extent, -extent, extent, 1.0f, 400.0f);
+          composeConstants.LightViewProj[c] = (lv * lp).Transpose();
+      }
+  }
 
   mComposeCB->CopyData(0, composeConstants);
 

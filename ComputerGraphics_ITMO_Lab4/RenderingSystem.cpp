@@ -10,10 +10,12 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
   BuildInputLayout();
   BuildGeometryRootSignature(device);
   BuildComposeRootSignature(device);
+  BuildShadowRootSignature(device);
   BuildParticlesComputeRootSignature(device);
   BuildParticlesRenderRootSignature(device);
   BuildGeometryPSO(device);
   BuildComposePSO(device);
+  BuildShadowPSO(device);
   BuildParticlesEmitPSO(device);
   BuildParticlesInitPSO(device);
   BuildParticlesSimulatePSO(device);
@@ -22,6 +24,7 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
   mGBuffer.Initialize(device, width, height, rtvHeap, cbvSrvHeap,
                       rtvDescriptorSize, cbvSrvDescriptorSize, kGBufferRtvStart,
                       kGBufferSrvStart);
+  BuildShadowResources(device, cbvSrvHeap, cbvSrvDescriptorSize);
   BuildParticleResources(device, cbvSrvHeap, cbvSrvDescriptorSize);
 }
 
@@ -50,6 +53,10 @@ void RenderingSystem::BuildShaders() {
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/DeferredComposePS.hlsl",
       "PS", "ps_5_0");
+  mShadowVS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ShadowVS.hlsl",
+      "VS", "vs_5_0");
   mParticlesEmitCS = ShaderHelper::CompileShader(
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/ParticleEmitCS.hlsl",
@@ -134,29 +141,34 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[3];
-
-  CD3DX12_DESCRIPTOR_RANGE gbufferSrvTable;
-  gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
-  params[0].InitAsDescriptorTable(1, &gbufferSrvTable);
-
-  CD3DX12_DESCRIPTOR_RANGE samplerTable;
-  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
-  params[1].InitAsDescriptorTable(1, &samplerTable);
-
-  params[2].InitAsConstantBufferView(0);
-
-  CD3DX12_ROOT_SIGNATURE_DESC desc(
-      3, params, 0, nullptr,
+    CD3DX12_ROOT_PARAMETER params[2];
+    CD3DX12_DESCRIPTOR_RANGE srvTable;
+    srvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
+    params[0].InitAsDescriptorTable(1, &srvTable);
+    params[1].InitAsConstantBufferView(0);
+    CD3DX12_STATIC_SAMPLER_DESC linearSampler(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
+    CD3DX12_STATIC_SAMPLER_DESC shadowSampler(1, D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER, D3D12_TEXTURE_ADDRESS_MODE_BORDER, D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+        0.0f, 16, D3D12_COMPARISON_FUNC_LESS_EQUAL, D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
+    CD3DX12_ROOT_SIGNATURE_DESC desc(2, params, 2, &linearSampler,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-  ComPtr<ID3DBlob> serialized;
-  ComPtr<ID3DBlob> error;
-  ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                            &serialized, &error));
-  ThrowIfFailed(device->CreateRootSignature(
-      0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
-      IID_PPV_ARGS(&mComposeRootSignature)));
+    desc.pStaticSamplers = &linearSampler;
+    D3D12_STATIC_SAMPLER_DESC samplers[2] = { linearSampler, shadowSampler };
+    desc.NumStaticSamplers = 2;
+    desc.pStaticSamplers = samplers;
+    ComPtr<ID3DBlob> serialized; ComPtr<ID3DBlob> error;
+    ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &error));
+    ThrowIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&mComposeRootSignature)));
+}
+void RenderingSystem::BuildShadowRootSignature(ID3D12Device* device) {
+    CD3DX12_ROOT_PARAMETER params[2];
+    CD3DX12_DESCRIPTOR_RANGE cbvTable0; cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+    params[0].InitAsDescriptorTable(1, &cbvTable0);
+    params[1].InitAsConstantBufferView(1);
+    CD3DX12_ROOT_SIGNATURE_DESC desc(2, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    ComPtr<ID3DBlob> serialized; ComPtr<ID3DBlob> error;
+    ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &error));
+    ThrowIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(), IID_PPV_ARGS(&mShadowRootSignature)));
 }
 
 void RenderingSystem::BuildParticlesComputeRootSignature(ID3D12Device* device) {
@@ -268,6 +280,21 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
   ThrowIfFailed(
       device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mComposePSO)));
 }
+void RenderingSystem::BuildShadowPSO(ID3D12Device* device) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
+    pso.InputLayout = { mInputLayout.data(), static_cast<UINT>(mInputLayout.size()) };
+    pso.pRootSignature = mShadowRootSignature.Get();
+    pso.VS = { reinterpret_cast<BYTE*>(mShadowVS->GetBufferPointer()), mShadowVS->GetBufferSize() };
+    pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    pso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    pso.SampleMask = UINT_MAX;
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pso.NumRenderTargets = 0;
+    pso.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    pso.SampleDesc.Count = 1;
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mShadowPSO)));
+}
 
 void RenderingSystem::BuildParticlesEmitPSO(ID3D12Device* device) {
   D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
@@ -321,6 +348,19 @@ void RenderingSystem::BuildParticlesRenderPSO(ID3D12Device* device) {
 
   ThrowIfFailed(device->CreateGraphicsPipelineState(
       &pso, IID_PPV_ARGS(&mParticlesRenderPSO)));
+}
+void RenderingSystem::BuildShadowResources(ID3D12Device* device, ID3D12DescriptorHeap* cbvSrvHeap, UINT cbvSrvDescriptorSize) {
+    D3D12_CLEAR_VALUE clearValue = {}; clearValue.Format = DXGI_FORMAT_D32_FLOAT; clearValue.DepthStencil.Depth = 1.0f;
+    auto desc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R32_TYPELESS, kShadowMapSize, kShadowMapSize, kCascadeCount, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    auto heap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue, IID_PPV_ARGS(&mShadowMap)));
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {}; dsvHeapDesc.NumDescriptors = kCascadeCount; dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    ComPtr<ID3D12DescriptorHeap> dsvHeap; ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dsvHeap)));
+    UINT dsvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    for (UINT i = 0; i < kCascadeCount; i++) { mShadowDsv[i] = CD3DX12_CPU_DESCRIPTOR_HANDLE(dsvHeap->GetCPUDescriptorHandleForHeapStart(), i, dsvSize); D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {}; dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY; dsv.Format = DXGI_FORMAT_D32_FLOAT; dsv.Texture2DArray.ArraySize = 1; dsv.Texture2DArray.FirstArraySlice = i; device->CreateDepthStencilView(mShadowMap.Get(), &dsv, mShadowDsv[i]); }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv = {}; srv.Format = DXGI_FORMAT_R32_FLOAT; srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY; srv.Texture2DArray.ArraySize = kCascadeCount; srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cpu(cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), kShadowMapSrvIndex, cbvSrvDescriptorSize);
+    device->CreateShaderResourceView(mShadowMap.Get(), &srv, cpu);
 }
 
 void RenderingSystem::BuildParticleResources(ID3D12Device* device,
@@ -577,6 +617,28 @@ void RenderingSystem::Render(
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);
 
+  auto shadowToWrite = CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  cmdList->ResourceBarrier(1, &shadowToWrite);
+  cmdList->SetPipelineState(mShadowPSO.Get());
+  cmdList->SetGraphicsRootSignature(mShadowRootSignature.Get());
+  cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
+  cmdList->IASetIndexBuffer(&indexBufferView);
+  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  for (UINT c = 0; c < kCascadeCount; ++c) {
+      cmdList->ClearDepthStencilView(mShadowDsv[c], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+      cmdList->OMSetRenderTargets(0, nullptr, false, &mShadowDsv[c]);
+      for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
+          const SubmeshInstance& submeshInstance = submeshInstances[visibleInstanceIndex];
+          CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), static_cast<INT>(kObjectCbvStart + submeshInstance.ObjectIndex), cbvSrvDescriptorSize);
+          cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
+          cmdList->SetGraphicsRootConstantBufferView(1, composeCBAddress + offsetof(ComposeConstants, LightViewProj) + sizeof(DirectX::SimpleMath::Matrix) * c);
+          const auto& submesh = modelGeometry.Submeshes[submeshInstance.SubmeshIndex];
+          cmdList->DrawIndexedInstanced(submesh.IndexCount, 1, submesh.StartIndexLocation, 0, 0);
+      }
+  }
+  auto shadowToSrv = CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  cmdList->ResourceBarrier(1, &shadowToSrv);
+
   cmdList->SetPipelineState(mGeometryPSO.Get());
   cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
 
@@ -708,10 +770,11 @@ void RenderingSystem::Render(
 
   cmdList->SetPipelineState(mComposePSO.Get());
   cmdList->SetGraphicsRootSignature(mComposeRootSignature.Get());
-  cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSrvStartGpuHandle());
-  cmdList->SetGraphicsRootDescriptorTable(
-      1, samplerHeap->GetGPUDescriptorHandleForHeapStart());
-  cmdList->SetGraphicsRootConstantBufferView(2, composeCBAddress);
+  CD3DX12_GPU_DESCRIPTOR_HANDLE composeSrvTable(cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), kGBufferSrvStart, cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(0, composeSrvTable);
+  CD3DX12_GPU_DESCRIPTOR_HANDLE composeSrv(mGBuffer.GetSrvStartGpuHandle());
+  cmdList->SetGraphicsRootDescriptorTable(0, composeSrv);
+  cmdList->SetGraphicsRootConstantBufferView(1, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
 

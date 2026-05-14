@@ -88,6 +88,10 @@ struct ComposeConstants {
   DirectX::SimpleMath::Matrix InvViewProj;
   DirectX::SimpleMath::Vector4 CameraPosition;
   DirectX::SimpleMath::Vector4 ScreenSize;
+  DirectX::SimpleMath::Vector4 CameraForward;
   DirectX::SimpleMath::Vector4 LightCount;
+  DirectX::SimpleMath::Vector4 CascadeSplits;
+  DirectX::SimpleMath::Vector4 ShadowTexelSize;
+  DirectX::SimpleMath::Matrix LightViewProj[3];
   GpuLight Lights[kMaxLights];
 };

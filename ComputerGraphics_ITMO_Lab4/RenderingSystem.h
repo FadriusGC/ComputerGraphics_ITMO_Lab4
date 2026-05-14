@@ -17,6 +17,7 @@ class RenderingSystem {
       kObjectCbvStart + kObjectCbvReservedCount;
   static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
   static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
+  static constexpr UINT kShadowMapSrvIndex = kTextureSrvStart + 260;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
@@ -44,16 +45,19 @@ class RenderingSystem {
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
   void BuildComposeRootSignature(ID3D12Device* device);
+  void BuildShadowRootSignature(ID3D12Device* device);
   void BuildParticlesComputeRootSignature(ID3D12Device* device);
   void BuildParticlesRenderRootSignature(ID3D12Device* device);
   void BuildGeometryPSO(ID3D12Device* device);
   void BuildComposePSO(ID3D12Device* device);
+  void BuildShadowPSO(ID3D12Device* device);
   void BuildParticlesEmitPSO(ID3D12Device* device);
   void BuildParticlesSimulatePSO(ID3D12Device* device);
   void BuildParticlesInitPSO(ID3D12Device* device);
   void BuildParticlesRenderPSO(ID3D12Device* device);
   void BuildInputLayout();
   void BuildShaders();
+  void BuildShadowResources(ID3D12Device* device, ID3D12DescriptorHeap* cbvSrvHeap, UINT cbvSrvDescriptorSize);
   void BuildParticleResources(ID3D12Device* device,
                               ID3D12DescriptorHeap* cbvSrvHeap,
                               UINT cbvSrvDescriptorSize);
@@ -63,10 +67,12 @@ class RenderingSystem {
 
   ComPtr<ID3D12RootSignature> mGeometryRootSignature;
   ComPtr<ID3D12RootSignature> mComposeRootSignature;
+  ComPtr<ID3D12RootSignature> mShadowRootSignature;
   ComPtr<ID3D12RootSignature> mParticlesComputeRootSignature;
   ComPtr<ID3D12RootSignature> mParticlesRenderRootSignature;
   ComPtr<ID3D12PipelineState> mGeometryPSO;
   ComPtr<ID3D12PipelineState> mComposePSO;
+  ComPtr<ID3D12PipelineState> mShadowPSO;
   ComPtr<ID3D12PipelineState> mParticlesEmitPSO;
   ComPtr<ID3D12PipelineState> mParticlesSimulatePSO;
   ComPtr<ID3D12PipelineState> mParticlesInitPSO;
@@ -78,6 +84,7 @@ class RenderingSystem {
   ComPtr<ID3DBlob> mGeometryDS;
   ComPtr<ID3DBlob> mComposeVS;
   ComPtr<ID3DBlob> mComposePS;
+  ComPtr<ID3DBlob> mShadowVS;
   ComPtr<ID3DBlob> mParticlesEmitCS;
   ComPtr<ID3DBlob> mParticlesInitCS;
   ComPtr<ID3DBlob> mParticlesSimulateCS;
@@ -87,6 +94,10 @@ class RenderingSystem {
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
   GBuffer mGBuffer;
+  static constexpr UINT kCascadeCount = 3;
+  static constexpr UINT kShadowMapSize = 2048;
+  ComPtr<ID3D12Resource> mShadowMap;
+  D3D12_CPU_DESCRIPTOR_HANDLE mShadowDsv[kCascadeCount] = {};
 
   struct ParticleGpuData {
     DirectX::SimpleMath::Vector3 Position;
