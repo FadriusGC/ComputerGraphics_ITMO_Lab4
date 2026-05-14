@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <utility>
 
@@ -1414,16 +1415,94 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.Lights[secondSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
   {
-      const DirectX::SimpleMath::Vector3 lightDir = DirectX::SimpleMath::Vector3(0.35f, 1.0f, -0.1f);
-      const float splits[4] = { 1.0f, 25.0f, 80.0f, 180.0f };
+      DirectX::SimpleMath::Vector3 lightDir =
+          DirectX::SimpleMath::Vector3(0.35f, 1.0f, -0.1f);
+      lightDir.Normalize();
+      const float splits[4] = { 0.1f, composeConstants.CascadeSplits.x,
+                               composeConstants.CascadeSplits.y,
+                               composeConstants.CascadeSplits.z };
+
+      auto BuildCascadeFrustumCorners =
+          [&](float cascadeNear, float cascadeFar,
+              std::array<DirectX::SimpleMath::Vector3, 8>& outCorners) {
+                  const float fovY = 0.25f * DirectX::XM_PI;
+                  const float aspect = static_cast<float>(WIDTH) /
+                      static_cast<float>(HEIGHT);
+
+                  const float tanHalfFovY = tanf(fovY * 0.5f);
+                  const float nearHalfY = cascadeNear * tanHalfFovY;
+                  const float nearHalfX = nearHalfY * aspect;
+                  const float farHalfY = cascadeFar * tanHalfFovY;
+                  const float farHalfX = farHalfY * aspect;
+
+                  DirectX::SimpleMath::Vector3 camRight =
+                      DirectX::SimpleMath::Vector3::Up.Cross(lookDir);
+                  camRight.Normalize();
+                  DirectX::SimpleMath::Vector3 camUp =
+                      lookDir.Cross(camRight);
+                  camUp.Normalize();
+
+                  const DirectX::SimpleMath::Vector3 nearCenter =
+                      mCamPos + lookDir * cascadeNear;
+                  const DirectX::SimpleMath::Vector3 farCenter =
+                      mCamPos + lookDir * cascadeFar;
+
+                  outCorners[0] = nearCenter + camUp * nearHalfY - camRight * nearHalfX;
+                  outCorners[1] = nearCenter + camUp * nearHalfY + camRight * nearHalfX;
+                  outCorners[2] = nearCenter - camUp * nearHalfY - camRight * nearHalfX;
+                  outCorners[3] = nearCenter - camUp * nearHalfY + camRight * nearHalfX;
+
+                  outCorners[4] = farCenter + camUp * farHalfY - camRight * farHalfX;
+                  outCorners[5] = farCenter + camUp * farHalfY + camRight * farHalfX;
+                  outCorners[6] = farCenter - camUp * farHalfY - camRight * farHalfX;
+                  outCorners[7] = farCenter - camUp * farHalfY + camRight * farHalfX;
+        
+          };
       for (int c = 0; c < 3; ++c) {
-          float zMid = 0.5f * (splits[c] + splits[c + 1]);
-          DirectX::SimpleMath::Vector3 center = mCamPos + lookDir * zMid;
-          DirectX::SimpleMath::Vector3 eye = center + lightDir * 120.0f;
-          auto lv = DirectX::SimpleMath::Matrix::CreateLookAt(eye, center, DirectX::SimpleMath::Vector3::Up);
-          float extent = splits[c + 1];
-          auto lp = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(-extent, extent, -extent, extent, 1.0f, 400.0f);
-          composeConstants.LightViewProj[c] = (lv * lp).Transpose();
+          std::array<DirectX::SimpleMath::Vector3, 8> corners;
+          BuildCascadeFrustumCorners(splits[c], splits[c + 1], corners);
+
+          DirectX::SimpleMath::Vector3 center = DirectX::SimpleMath::Vector3::Zero;
+          for (const auto& corner : corners) {
+              center += corner;
+          }
+          center /= 8.0f;
+
+          float radius = 0.0f;
+          for (const auto& corner : corners) {
+              radius = std::max(radius, (corner - center).Length());
+          }
+          radius = std::ceil(radius * 16.0f) / 16.0f;
+
+          const DirectX::SimpleMath::Vector3 lightPos = center - lightDir * (radius * 2.0f);
+          const auto lightView = DirectX::SimpleMath::Matrix::CreateLookAt(
+              lightPos, center, DirectX::SimpleMath::Vector3::Up);
+
+          float minX = std::numeric_limits<float>::max();
+          float maxX = std::numeric_limits<float>::lowest();
+          float minY = std::numeric_limits<float>::max();
+          float maxY = std::numeric_limits<float>::lowest();
+          float minZ = std::numeric_limits<float>::max();
+          float maxZ = std::numeric_limits<float>::lowest();
+
+          for (const auto& corner : corners) {
+              const auto ls = DirectX::SimpleMath::Vector3::Transform(corner, lightView);
+              minX = std::min(minX, ls.x);
+              maxX = std::max(maxX, ls.x);
+              minY = std::min(minY, ls.y);
+              maxY = std::max(maxY, ls.y);
+              minZ = std::min(minZ, ls.z);
+              maxZ = std::max(maxZ, ls.z);
+          }
+
+          const float zPadding = 80.0f;
+          minZ -= zPadding;
+          maxZ += zPadding;
+
+          const auto lightProj = DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
+              minX, maxX, minY, maxY, minZ, maxZ);
+
+          composeConstants.LightViewProj[c] = (lightView * lightProj).Transpose();
       }
   }
 
