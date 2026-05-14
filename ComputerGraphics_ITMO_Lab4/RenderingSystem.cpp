@@ -5,6 +5,7 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
                                  ID3D12DescriptorHeap* cbvSrvHeap,
                                  UINT rtvDescriptorSize,
                                  UINT cbvSrvDescriptorSize) {
+  mCbvSrvDescriptorSize = cbvSrvDescriptorSize;
   BuildShaders();
   BuildInputLayout();
   BuildGeometryRootSignature(device);
@@ -187,12 +188,15 @@ void RenderingSystem::BuildParticlesComputeRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildParticlesRenderRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[2];
+  CD3DX12_ROOT_PARAMETER params[3];
+  CD3DX12_DESCRIPTOR_RANGE smokeAtlasSrvRange;
+  smokeAtlasSrvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1);
   params[0].InitAsShaderResourceView(0);
   params[1].InitAsConstantBufferView(0);
+  params[2].InitAsDescriptorTable(1, &smokeAtlasSrvRange);
 
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      2, params, 0, nullptr,
+      3, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -533,6 +537,10 @@ void RenderingSystem::RenderParticles(ID3D12GraphicsCommandList* cmdList) {
       0, mParticlePoolBuffer->GetGPUVirtualAddress());
   cmdList->SetGraphicsRootConstantBufferView(
       1, mParticleRenderConstantBuffer->GetGPUVirtualAddress());
+  CD3DX12_GPU_DESCRIPTOR_HANDLE smokeTextureHandle(
+      mCbvSrvHeapGpuStart, static_cast<INT>(kParticleSmokeSrvIndex),
+      mCbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(2, smokeTextureHandle);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
   cmdList->DrawInstanced(kParticleMaxCount, 1, 0, 0);
 }
@@ -558,9 +566,13 @@ void RenderingSystem::Render(
 
   ID3D12DescriptorHeap* heaps[] = {cbvSrvHeap, samplerHeap};
   cmdList->SetDescriptorHeaps(2, heaps);
+  mCbvSrvHeapGpuStart = cbvSrvHeap->GetGPUDescriptorHandleForHeapStart();
   mMappedParticleRenderConstants->CameraPosition = cameraPosition;
   mMappedParticleRenderConstants->BillboardSize = 0.55f;
   mMappedParticleRenderConstants->MaxParticles = kParticleMaxCount;
+  mMappedParticleRenderConstants->TotalTime = mParticlesTotalTime;
+  mMappedParticleRenderConstants->AtlasGrid = {8.0f, 8.0f};
+  mMappedParticleRenderConstants->AtlasFps = 24.0f;
   mMappedParticleRenderConstants->ViewProj = viewProj.Transpose();
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);

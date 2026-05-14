@@ -16,6 +16,7 @@ class RenderingSystem {
   static constexpr UINT kDepthSrvIndex =
       kObjectCbvStart + kObjectCbvReservedCount;
   static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
+  static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
@@ -111,7 +112,10 @@ class RenderingSystem {
     DirectX::SimpleMath::Vector3 CameraPosition;
     float BillboardSize = 1.0f;
     UINT MaxParticles = 0;
-    DirectX::SimpleMath::Vector3 Padding;
+    float TotalTime = 0.0f;
+    DirectX::SimpleMath::Vector2 AtlasGrid = {8.0f, 8.0f};
+    float AtlasFps = 24.0f;
+    float Padding = 0.0f;
   };
 
   static constexpr UINT kParticleMaxCount = 16384;
@@ -133,6 +137,7 @@ class RenderingSystem {
   bool mUseDeadListAAsConsume = true;
   bool mParticlesInitialized = false;
   float mParticlesTotalTime = 0.0f;
+  UINT mCbvSrvDescriptorSize = 0;
   D3D12_RESOURCE_STATES mParticlePoolState = D3D12_RESOURCE_STATE_COMMON;
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListAUavCpuHandle = {};
   D3D12_CPU_DESCRIPTOR_HANDLE mDeadListBUavCpuHandle = {};
@@ -140,4 +145,5 @@ class RenderingSystem {
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListAUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListBUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mParticlePoolUavGpuHandle = {};
+  D3D12_GPU_DESCRIPTOR_HANDLE mCbvSrvHeapGpuStart = {};
 };

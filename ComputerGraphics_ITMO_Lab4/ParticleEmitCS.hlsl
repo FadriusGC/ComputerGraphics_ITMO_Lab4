@@ -38,7 +38,7 @@ void CS(uint3 dtid : SV_DispatchThreadID)
     p.Velocity = float3((seed - 0.5) * 1.5, 5.5 + seed2 * 3.5, (seed2 - 0.5) * 1.5);
     p.Age = 0.0;
     p.Lifetime = 2.0 + seed * 1.4;
-    p.Color = float4(1.0, 0.07, 0.07, 1.0);
+    p.Color = float4(1.0, 1.0, 1.0, 1.0);
     p.Size = 0.35 + seed2 * 0.2;
     p.Padding = 0.0.xxx;
 
