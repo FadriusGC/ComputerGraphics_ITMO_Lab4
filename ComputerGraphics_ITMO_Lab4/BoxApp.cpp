@@ -1437,11 +1437,11 @@ void BoxApp::Update(const GameTimer& gt) {
       maxB.x = centerX + width * 0.5f;
       minB.y = centerY - height * 0.5f;
       maxB.y = centerY + height * 0.5f;
-      minB.z -= 250.0f;
-      maxB.z += 250.0f;
+      const float nearPlane = std::max(0.1f, minB.z - 250.0f);
+      const float farPlane = std::max(nearPlane + 1.0f, maxB.z + 250.0f);
 
       Matrix lightProj = Matrix::CreateOrthographicOffCenter(
-          minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
+          minB.x, maxB.x, minB.y, maxB.y, nearPlane, farPlane);
       composeConstants.ShadowViewProj[cascade] =
           (lightView * lightProj).Transpose();
     }

@@ -964,11 +964,11 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
     maxB.x = centerX + width * 0.5f;
     minB.y = centerY - height * 0.5f;
     maxB.y = centerY + height * 0.5f;
-    minB.z -= 250.0f;
-    maxB.z += 250.0f;
+    const float nearPlane = (std::max)(0.1f, minB.z - 250.0f);
+    const float farPlane = (std::max)(nearPlane + 1.0f, maxB.z + 250.0f);
 
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
-        minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
+        minB.x, maxB.x, minB.y, maxB.y, nearPlane, farPlane);
     mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
   }
 }
@@ -980,6 +980,7 @@ void RenderingSystem::RenderShadowPass(
     const std::vector<SceneObject>& sceneObjects,
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visIndices) {
+  (void)visIndices;
   if (!mShadowMap || !mShadowPSO || !mShadowRootSignature || !mShadowFrameCB) {
     return;
   }
@@ -1019,11 +1020,10 @@ void RenderingSystem::RenderShadowPass(
         1, mShadowFrameCB->GetGPUVirtualAddress() +
                cascade * mShadowFrameCbStride);
 
-    for (UINT visibleIndex : visIndices) {
-      if (visibleIndex >= submeshInstances.size()) {
-        continue;
-      }
-      const SubmeshInstance& instance = submeshInstances[visibleIndex];
+    for (UINT submeshInstanceIndex = 0;
+         submeshInstanceIndex < static_cast<UINT>(submeshInstances.size());
+         ++submeshInstanceIndex) {
+      const SubmeshInstance& instance = submeshInstances[submeshInstanceIndex];
       if (instance.ObjectIndex >= sceneObjects.size() ||
           instance.SubmeshIndex >= modelGeometry.Submeshes.size()) {
         continue;
