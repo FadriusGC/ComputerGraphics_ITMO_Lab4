@@ -978,7 +978,7 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
 
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
         minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
-    mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
+    mShadowViewProj[cascade] = (lightView * lightProj);
   }
 }
 void RenderingSystem::RenderShadowPass(
@@ -1015,16 +1015,19 @@ void RenderingSystem::RenderShadowPass(
   cmdList->IASetIndexBuffer(&indexBufferView);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+  void* shadowMapped = nullptr;
+  mShadowFrameCB->Map(0, nullptr, &shadowMapped);
+  for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+    memcpy(reinterpret_cast<std::uint8_t*>(shadowMapped) +
+               cascade * mShadowFrameCbStride,
+           &mShadowViewProj[cascade], sizeof(DirectX::SimpleMath::Matrix));
+  }
+  mShadowFrameCB->Unmap(0, nullptr);
+
   for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
     cmdList->ClearDepthStencilView(mShadowDsvHandles[cascade],
                                    D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     cmdList->OMSetRenderTargets(0, nullptr, FALSE, &mShadowDsvHandles[cascade]);
-    void* shadowMapped = nullptr;
-    mShadowFrameCB->Map(0, nullptr, &shadowMapped);
-    memcpy(reinterpret_cast<std::uint8_t*>(shadowMapped) +
-               cascade * mShadowFrameCbStride,
-           &mShadowViewProj[cascade], sizeof(DirectX::SimpleMath::Matrix));
-    mShadowFrameCB->Unmap(0, nullptr);
     cmdList->SetGraphicsRootConstantBufferView(
         1, mShadowFrameCB->GetGPUVirtualAddress() +
                cascade * mShadowFrameCbStride);
