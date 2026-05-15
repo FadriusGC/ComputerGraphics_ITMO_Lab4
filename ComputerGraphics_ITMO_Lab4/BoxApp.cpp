@@ -1353,6 +1353,9 @@ void BoxApp::Update(const GameTimer& gt) {
   for (int cascade = 0; cascade < ComposeConstants::kShadowCascadeCount;
        ++cascade) {
     composeConstants.ShadowViewProj[cascade] = shadowViewProjMatrices[cascade];
+    // зависит от этого транспоуза, если поставить тут
+    // .Transpose() то даже намек на тени пропадает
+    // shadowViewProjMatrices[cascade].Transpose();
   }
   composeConstants.ShadowParams = DirectX::SimpleMath::Vector4(
       static_cast<float>(mRenderingSystem.GetShadowMapResolution()),

@@ -979,6 +979,7 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
         minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
     mShadowViewProj[cascade] = (lightView * lightProj);
+    ;
   }
 }
 void RenderingSystem::RenderShadowPass(
@@ -1018,9 +1019,11 @@ void RenderingSystem::RenderShadowPass(
   void* shadowMapped = nullptr;
   mShadowFrameCB->Map(0, nullptr, &shadowMapped);
   for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+    const DirectX::SimpleMath::Matrix shadowViewProjT =
+        mShadowViewProj[cascade].Transpose();
     memcpy(reinterpret_cast<std::uint8_t*>(shadowMapped) +
                cascade * mShadowFrameCbStride,
-           &mShadowViewProj[cascade], sizeof(DirectX::SimpleMath::Matrix));
+           &shadowViewProjT, sizeof(DirectX::SimpleMath::Matrix));
   }
   mShadowFrameCB->Unmap(0, nullptr);
 
