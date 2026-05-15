@@ -327,8 +327,8 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
                   mShadowPS->GetBufferSize()};
   shadowPso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
   shadowPso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-  shadowPso.RasterizerState.DepthBias = 100;
-  shadowPso.RasterizerState.SlopeScaledDepthBias = 0.00001f;
+  shadowPso.RasterizerState.DepthBias = 2000;
+  shadowPso.RasterizerState.SlopeScaledDepthBias = 2.0f;
   shadowPso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
   shadowPso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
   shadowPso.SampleMask = UINT_MAX;
@@ -978,7 +978,7 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
 
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
         minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
-    mShadowViewProj[cascade] = lightView * lightProj;  // без Transpose()
+    mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
   }
 }
 void RenderingSystem::RenderShadowPass(
