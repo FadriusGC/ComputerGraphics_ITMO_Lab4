@@ -905,7 +905,9 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
         Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
   }
 
-  Vector3 lightDir = Vector3(-0.35f, -1.0f, 0.1f);
+  // Must match the directional light used in compose pass, otherwise
+  // CSM is rendered from one direction and sampled/ lit from another.
+  Vector3 lightDir = Vector3(0.0f, -1.0f, 0.0f);
   lightDir.Normalize();
   Vector3 up(0.0f, 1.0f, 0.0f);
   if (std::abs(lightDir.Dot(up)) > 0.95f) {

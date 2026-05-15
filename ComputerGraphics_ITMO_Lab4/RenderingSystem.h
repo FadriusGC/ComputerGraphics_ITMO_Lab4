@@ -46,6 +46,19 @@ class RenderingSystem {
               const DirectX::SimpleMath::Matrix& viewProj,
               const DirectX::SimpleMath::Vector3& cameraPosition);
 
+  const DirectX::SimpleMath::Vector4& GetCascadeSplits() const {
+    return mCascadeSplits;
+  }
+
+  const std::array<DirectX::SimpleMath::Matrix, kShadowCascadeCount>&
+  GetShadowViewProjMatrices() const {
+    return mShadowViewProj;
+  }
+
+  UINT GetShadowCascadeCount() const { return kShadowCascadeCount; }
+  UINT GetShadowMapResolution() const { return kShadowMapResolution; }
+  UINT GetShadowsEnabled() const { return mEnableShadows; }
+
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
   void BuildComposeRootSignature(ID3D12Device* device);
