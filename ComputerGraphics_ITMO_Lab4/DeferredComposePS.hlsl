@@ -6,7 +6,10 @@ struct PS_INPUT {
 Texture2D gAlbedo : register(t0);
 Texture2D gNormal : register(t1);
 Texture2D gDepth : register(t2);
+Texture2DArray<float> gShadowMap : register(t3);
+
 SamplerState gSampler : register(s0);
+SamplerComparisonState gShadowSampler : register(s1);
 
 static const uint LIGHT_TYPE_POINT = 0;
 static const uint LIGHT_TYPE_DIRECTIONAL = 1;
@@ -22,77 +25,114 @@ struct GpuLight {
 
 cbuffer cbCompose : register(b0) {
     float4x4 gInvViewProj;
+    float4x4 gView;
     float4 gCameraPosition;
     float4 gScreenSize;
+    float4 gCascadeSplits;
+    float4x4 gShadowViewProj[4];
+    float4 gShadowParams;
     float4 gLightCount;
-    GpuLight gLights[MAX_LIGHTS];
+    GpuLight gLights[100];
 };
 
-float3 ReconstructWorldPos(float2 uv, float depth) {
-    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
-    float4 worldPos = mul(ndc, gInvViewProj);
-    return worldPos.xyz / max(worldPos.w, 1e-6f);
+float3 ReconstructWorldPos(float2 uv, float d) {
+    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, d, 1.0f);
+    float4 w = mul(ndc, gInvViewProj);
+    return w.xyz / max(w.w, 1e-6f);
 }
 
-float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir, float roughness) {
-    float3 radiance = light.ColorAndIntensity.rgb * light.ColorAndIntensity.a;
-    float3 L = 0.0f;
-    float attenuation = 1.0f;
+uint GetCascadeIndex(float viewDepth) {
+    uint i = 0;
+    if (viewDepth > gCascadeSplits.x) i = 1;
+    if (viewDepth > gCascadeSplits.y) i = 2;
+    if (viewDepth > gCascadeSplits.z) i = 3;
+    return min(i, max((uint)gShadowParams.y, 1u) - 1u);
+}
 
-    if (lightType == LIGHT_TYPE_DIRECTIONAL) {
-        L = normalize(-light.DirectionAndType.xyz);
-    } else {
-        float3 lightPos = light.PositionWorldAndRange.xyz;
-        float3 toLight = lightPos - worldPos;
-        float dist = length(toLight);
-        if (dist <= 1e-4f) return 0.0f;
+float GetShadowPCF(float3 worldPos, uint ci) {
+    float4 sh = mul(float4(worldPos, 1.0f), gShadowViewProj[ci]);
+    sh.xyz /= max(sh.w, 1e-6f);
 
-        L = toLight / dist;
-        float range = max(light.PositionWorldAndRange.w, 1e-3f);
-        float rangeFade = saturate(1.0f - dist / range);
-        attenuation = rangeFade * rangeFade;
+    float2 uv = float2(sh.x * 0.5f + 0.5f, -sh.y * 0.5f + 0.5f);
+    float depth = sh.z;
 
-        if (lightType == LIGHT_TYPE_SPOT) {
-            float3 spotDir = normalize(-light.DirectionAndType.xyz);
-            float cosTheta = dot(L, spotDir);
-            float innerCos = light.Params.x;
-            float outerCos = light.Params.y;
-            float spot = saturate((cosTheta - outerCos) / max(innerCos - outerCos, 1e-4f));
-            attenuation *= spot;
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f || depth < 0.0f || depth > 1.0f) {
+        return 1.0f;
+    }
+
+    float tex = 1.0f / max(gShadowParams.x, 1.0f);
+    float s = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            float2 offset = float2((float)x, (float)y) * tex;
+            s += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + offset, ci), depth);
         }
     }
 
-    float NdotL = saturate(dot(normal, L));
-    float3 diffuse = radiance * NdotL * attenuation;
-
-    float3 halfVec = normalize(L + viewDir);
-    float specPower = lerp(64.0f, 4.0f, saturate(roughness));
-    float specStrength = lerp(0.25f, 0.04f, saturate(roughness));
-    float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation;
-    float3 specular = radiance * spec * specStrength;
-
-    return diffuse + specular;
+    return s / 9.0f;
 }
 
-float4 PS(PS_INPUT input) : SV_Target {
-    float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
-    float4 normalSample = gNormal.Sample(gSampler, input.TexC);
-    float3 encodedNormal = normalSample.xyz;
-    float depth = gDepth.Sample(gSampler, input.TexC).r;
+float GetShadowFactor(float3 wp) {
+    if ((uint)gShadowParams.z == 0 || (uint)gShadowParams.y == 0) {
+        return 1.0f;
+    }
+    float4 vp = mul(float4(wp, 1.0f), gView);
+    return GetShadowPCF(wp, GetCascadeIndex(abs(vp.z)));
+}
 
-    float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
-    float roughness = saturate(normalSample.a);
-    float3 worldPos = ReconstructWorldPos(input.TexC, depth);
-    float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
+float3 EvaluateLight(uint t, GpuLight Ld, float3 wp, float3 n, float3 v, float rough) {
+    float3 r = Ld.ColorAndIntensity.rgb * Ld.ColorAndIntensity.a;
+    float3 L = 0.0f;
+    float att = 1.0f;
 
-    float3 color = albedo.rgb * 0.05f;
-    uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
+    if (t == LIGHT_TYPE_DIRECTIONAL) {
+        L = normalize(-Ld.DirectionAndType.xyz);
+        att *= GetShadowFactor(wp);
+    } else {
+        float3 to = Ld.PositionWorldAndRange.xyz - wp;
+        float d = length(to);
+        if (d <= 1e-4f) {
+            return 0.0f;
+        }
 
-    [loop]
-    for (uint i = 0; i < lightCount; ++i) {
-        uint lightType = (uint)gLights[i].DirectionAndType.w;
-        color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness);
+        L = to / d;
+        float range = max(Ld.PositionWorldAndRange.w, 1e-3f);
+        float rf = saturate(1.0f - d / range);
+        att = rf * rf;
+
+        if (t == LIGHT_TYPE_SPOT) {
+            float3 sd = normalize(-Ld.DirectionAndType.xyz);
+            float ct = dot(L, sd);
+            float spot = saturate((ct - Ld.Params.y) / max(Ld.Params.x - Ld.Params.y, 1e-4f));
+            att *= spot;
+        }
     }
 
-    return float4(saturate(color), albedo.a);
+    float ndl = saturate(dot(n, L));
+    float3 diff = r * ndl * att;
+    float3 h = normalize(L + v);
+    float sp = pow(saturate(dot(n, h)), lerp(64.0f, 4.0f, saturate(rough))) * att;
+    return diff + r * sp * lerp(0.25f, 0.04f, saturate(rough));
+}
+
+float4 PS(PS_INPUT i) : SV_Target {
+    float4 a = gAlbedo.Sample(gSampler, i.TexC);
+    float4 ns = gNormal.Sample(gSampler, i.TexC);
+    float d = gDepth.Sample(gSampler, i.TexC).r;
+    float3 n = normalize(ns.xyz * 2.0f - 1.0f);
+    float rough = saturate(ns.a);
+    float3 wp = ReconstructWorldPos(i.TexC, d);
+    float3 v = normalize(gCameraPosition.xyz - wp);
+    float3 c = a.rgb * 0.05f;
+
+    uint lc = min((uint)gLightCount.x, MAX_LIGHTS);
+    [loop]
+    for (uint k = 0; k < lc; ++k) {
+        uint lightType = (uint)gLights[k].DirectionAndType.w;
+        c += a.rgb * EvaluateLight(lightType, gLights[k], wp, n, v, rough);
+    }
+
+    return float4(saturate(c), a.a);
 }

@@ -17,6 +17,9 @@ class RenderingSystem {
       kObjectCbvStart + kObjectCbvReservedCount;
   static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
   static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
+  static constexpr UINT kShadowMapSrvIndex = kTextureSrvStart + 257;
+  static constexpr UINT kShadowCascadeCount = 4;
+  static constexpr UINT kShadowMapResolution = 2048;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
@@ -38,6 +41,8 @@ class RenderingSystem {
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,
               D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+              const DirectX::SimpleMath::Matrix& view,
+              const DirectX::SimpleMath::Matrix& proj,
               const DirectX::SimpleMath::Matrix& viewProj,
               const DirectX::SimpleMath::Vector3& cameraPosition);
 
@@ -60,6 +65,18 @@ class RenderingSystem {
   void SimulateParticles(ID3D12GraphicsCommandList* cmdList, float deltaTime,
                          const DirectX::SimpleMath::Vector3& cameraPosition);
   void RenderParticles(ID3D12GraphicsCommandList* cmdList);
+  void BuildShadowPassResources(ID3D12Device* device,
+                                ID3D12DescriptorHeap* cbvSrvHeap,
+                                UINT cbvSrvDescriptorSize);
+  void UpdateCascadedShadowMapsData(const DirectX::SimpleMath::Matrix& view,
+                                    const DirectX::SimpleMath::Matrix& proj);
+  void RenderShadowPass(ID3D12GraphicsCommandList* cmdList,
+                        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+                        const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+                        const ModelGeometry& modelGeometry,
+                        const std::vector<SceneObject>& sceneObjects,
+                        const std::vector<SubmeshInstance>& submeshInstances,
+                        const std::vector<UINT>& visibleSubmeshInstanceIndices);
 
   ComPtr<ID3D12RootSignature> mGeometryRootSignature;
   ComPtr<ID3D12RootSignature> mComposeRootSignature;
@@ -71,6 +88,7 @@ class RenderingSystem {
   ComPtr<ID3D12PipelineState> mParticlesSimulatePSO;
   ComPtr<ID3D12PipelineState> mParticlesInitPSO;
   ComPtr<ID3D12PipelineState> mParticlesRenderPSO;
+  ComPtr<ID3D12PipelineState> mShadowPSO;
 
   ComPtr<ID3DBlob> mGeometryVS;
   ComPtr<ID3DBlob> mGeometryPS;
@@ -84,6 +102,8 @@ class RenderingSystem {
   ComPtr<ID3DBlob> mParticlesVS;
   ComPtr<ID3DBlob> mParticlesGS;
   ComPtr<ID3DBlob> mParticlesPS;
+  ComPtr<ID3DBlob> mShadowVS;
+  ComPtr<ID3DBlob> mShadowPS;
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
   GBuffer mGBuffer;
@@ -132,6 +152,10 @@ class RenderingSystem {
   ComPtr<ID3D12Resource> mParticleSimConstantBuffer;
   ComPtr<ID3D12Resource> mParticleRenderConstantBuffer;
   ComPtr<ID3D12Resource> mParticleCounterResetBuffer;
+  ComPtr<ID3D12RootSignature> mShadowRootSignature;
+  ComPtr<ID3D12Resource> mShadowMap;
+  ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
+  ComPtr<ID3D12Resource> mShadowFrameCB;
   ParticleSimConstants* mMappedParticleSimConstants = nullptr;
   ParticleRenderConstants* mMappedParticleRenderConstants = nullptr;
   bool mUseDeadListAAsConsume = true;
@@ -146,4 +170,11 @@ class RenderingSystem {
   D3D12_GPU_DESCRIPTOR_HANDLE mDeadListBUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mParticlePoolUavGpuHandle = {};
   D3D12_GPU_DESCRIPTOR_HANDLE mCbvSrvHeapGpuStart = {};
+  std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kShadowCascadeCount>
+      mShadowDsvHandles{};
+  std::array<DirectX::SimpleMath::Matrix, kShadowCascadeCount>
+      mShadowViewProj{};
+  DirectX::SimpleMath::Vector4 mCascadeSplits = {0, 0, 0, 0};
+  UINT mShadowFrameCbStride = 0;
+  UINT mEnableShadows = 1;
 };

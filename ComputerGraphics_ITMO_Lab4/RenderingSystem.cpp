@@ -1,5 +1,8 @@
 #include "RenderingSystem.h"
 
+#include <cfloat>
+#include <cmath>
+
 void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
                                  ID3D12DescriptorHeap* rtvHeap,
                                  ID3D12DescriptorHeap* cbvSrvHeap,
@@ -18,6 +21,8 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
   BuildParticlesInitPSO(device);
   BuildParticlesSimulatePSO(device);
   BuildParticlesRenderPSO(device);
+
+  BuildShadowPassResources(device, cbvSrvHeap, cbvSrvDescriptorSize);
 
   mGBuffer.Initialize(device, width, height, rtvHeap, cbvSrvHeap,
                       rtvDescriptorSize, cbvSrvDescriptorSize, kGBufferRtvStart,
@@ -74,6 +79,14 @@ void RenderingSystem::BuildShaders() {
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/ParticlePS.hlsl",
       "PS", "ps_5_0");
+  mShadowVS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ShadowMap.hlsl",
+      "VSMain", "vs_5_0");
+  mShadowPS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ShadowMap.hlsl",
+      "PSMain", "ps_5_0");
 }
 
 void RenderingSystem::BuildInputLayout() {
@@ -140,14 +153,23 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
   gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
   params[0].InitAsDescriptorTable(1, &gbufferSrvTable);
 
-  CD3DX12_DESCRIPTOR_RANGE samplerTable;
-  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
-  params[1].InitAsDescriptorTable(1, &samplerTable);
+  CD3DX12_DESCRIPTOR_RANGE shadowSrvTable;
+  shadowSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3);
+  params[1].InitAsDescriptorTable(1, &shadowSrvTable);
 
   params[2].InitAsConstantBufferView(0);
 
+  CD3DX12_STATIC_SAMPLER_DESC samplers[2] = {
+      CD3DX12_STATIC_SAMPLER_DESC(0, D3D12_FILTER_MIN_MAG_MIP_POINT),
+      CD3DX12_STATIC_SAMPLER_DESC(1, D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER, 0.0f, 16,
+                                  D3D12_COMPARISON_FUNC_LESS_EQUAL,
+                                  D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE)};
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      3, params, 0, nullptr,
+      3, params, 2, samplers,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -195,8 +217,17 @@ void RenderingSystem::BuildParticlesRenderRootSignature(ID3D12Device* device) {
   params[1].InitAsConstantBufferView(0);
   params[2].InitAsDescriptorTable(1, &smokeAtlasSrvRange);
 
+  CD3DX12_STATIC_SAMPLER_DESC samplers[2] = {
+      CD3DX12_STATIC_SAMPLER_DESC(0, D3D12_FILTER_MIN_MAG_MIP_POINT),
+      CD3DX12_STATIC_SAMPLER_DESC(1, D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER, 0.0f, 16,
+                                  D3D12_COMPARISON_FUNC_LESS_EQUAL,
+                                  D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE)};
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      3, params, 0, nullptr,
+      3, params, 2, samplers,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -267,6 +298,45 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
 
   ThrowIfFailed(
       device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mComposePSO)));
+
+  CD3DX12_ROOT_PARAMETER shadowParams[2];
+  CD3DX12_DESCRIPTOR_RANGE shadowObjectCbvRange;
+  shadowObjectCbvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+  shadowParams[0].InitAsDescriptorTable(1, &shadowObjectCbvRange);
+  shadowParams[1].InitAsConstantBufferView(1);
+
+  CD3DX12_ROOT_SIGNATURE_DESC shadowRsDesc(
+      2, shadowParams, 0, nullptr,
+      D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+  ComPtr<ID3DBlob> shadowSerialized;
+  ComPtr<ID3DBlob> shadowErrors;
+  ThrowIfFailed(D3D12SerializeRootSignature(&shadowRsDesc,
+                                            D3D_ROOT_SIGNATURE_VERSION_1,
+                                            &shadowSerialized, &shadowErrors));
+  ThrowIfFailed(device->CreateRootSignature(
+      0, shadowSerialized->GetBufferPointer(),
+      shadowSerialized->GetBufferSize(), IID_PPV_ARGS(&mShadowRootSignature)));
+
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPso = {};
+  shadowPso.InputLayout = {mInputLayout.data(),
+                           static_cast<UINT>(mInputLayout.size())};
+  shadowPso.pRootSignature = mShadowRootSignature.Get();
+  shadowPso.VS = {reinterpret_cast<BYTE*>(mShadowVS->GetBufferPointer()),
+                  mShadowVS->GetBufferSize()};
+  shadowPso.PS = {reinterpret_cast<BYTE*>(mShadowPS->GetBufferPointer()),
+                  mShadowPS->GetBufferSize()};
+  shadowPso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+  shadowPso.RasterizerState.DepthBias = 2000;
+  shadowPso.RasterizerState.SlopeScaledDepthBias = 2.0f;
+  shadowPso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+  shadowPso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+  shadowPso.SampleMask = UINT_MAX;
+  shadowPso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  shadowPso.NumRenderTargets = 0;
+  shadowPso.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+  shadowPso.SampleDesc.Count = 1;
+  ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowPso,
+                                                    IID_PPV_ARGS(&mShadowPSO)));
 }
 
 void RenderingSystem::BuildParticlesEmitPSO(ID3D12Device* device) {
@@ -559,6 +629,8 @@ void RenderingSystem::Render(
     const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
     D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+    const DirectX::SimpleMath::Matrix& view,
+    const DirectX::SimpleMath::Matrix& proj,
     const DirectX::SimpleMath::Matrix& viewProj,
     const DirectX::SimpleMath::Vector3& cameraPosition) {
   cmdList->RSSetViewports(1, &viewport);
@@ -576,6 +648,11 @@ void RenderingSystem::Render(
   mMappedParticleRenderConstants->ViewProj = viewProj.Transpose();
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);
+
+  UpdateCascadedShadowMapsData(view, proj);
+  RenderShadowPass(cmdList, vertexBufferView, indexBufferView, modelGeometry,
+                   sceneObjects, submeshInstances,
+                   visibleSubmeshInstanceIndices);
 
   cmdList->SetPipelineState(mGeometryPSO.Get());
   cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
@@ -709,8 +786,10 @@ void RenderingSystem::Render(
   cmdList->SetPipelineState(mComposePSO.Get());
   cmdList->SetGraphicsRootSignature(mComposeRootSignature.Get());
   cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSrvStartGpuHandle());
-  cmdList->SetGraphicsRootDescriptorTable(
-      1, samplerHeap->GetGPUDescriptorHandleForHeapStart());
+  CD3DX12_GPU_DESCRIPTOR_HANDLE shadowSrvGpu(
+      mCbvSrvHeapGpuStart, static_cast<INT>(kShadowMapSrvIndex),
+      mCbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(1, shadowSrvGpu);
   cmdList->SetGraphicsRootConstantBufferView(2, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
@@ -727,4 +806,238 @@ void RenderingSystem::Render(
       backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
       D3D12_RESOURCE_STATE_PRESENT);
   cmdList->ResourceBarrier(1, &toPresent);
+}
+
+void RenderingSystem::BuildShadowPassResources(ID3D12Device* device,
+                                               ID3D12DescriptorHeap* cbvSrvHeap,
+                                               UINT cbvSrvDescriptorSize) {
+  mShadowFrameCbStride = (sizeof(DirectX::SimpleMath::Matrix) + 255u) & ~255u;
+  const CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+  const auto cbDesc =
+      CD3DX12_RESOURCE_DESC::Buffer(mShadowFrameCbStride * kShadowCascadeCount);
+  ThrowIfFailed(device->CreateCommittedResource(
+      &uploadHeap, D3D12_HEAP_FLAG_NONE, &cbDesc,
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+      IID_PPV_ARGS(&mShadowFrameCB)));
+
+  D3D12_RESOURCE_DESC shadowDesc = {};
+  shadowDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  shadowDesc.Width = kShadowMapResolution;
+  shadowDesc.Height = kShadowMapResolution;
+  shadowDesc.DepthOrArraySize = kShadowCascadeCount;
+  shadowDesc.MipLevels = 1;
+  shadowDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+  shadowDesc.SampleDesc.Count = 1;
+  shadowDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  shadowDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+  D3D12_CLEAR_VALUE clearValue = {};
+  clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+  clearValue.DepthStencil.Depth = 1.0f;
+  ThrowIfFailed(device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
+      &shadowDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue,
+      IID_PPV_ARGS(&mShadowMap)));
+
+  D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+  dsvHeapDesc.NumDescriptors = kShadowCascadeCount;
+  dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+  ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc,
+                                             IID_PPV_ARGS(&mShadowDsvHeap)));
+  for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+    dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+    dsvDesc.Texture2DArray.ArraySize = 1;
+    dsvDesc.Texture2DArray.FirstArraySlice = cascade;
+    mShadowDsvHandles[cascade] = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        mShadowDsvHeap->GetCPUDescriptorHandleForHeapStart(), cascade,
+        device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_DSV));
+    device->CreateDepthStencilView(mShadowMap.Get(), &dsvDesc,
+                                   mShadowDsvHandles[cascade]);
+  }
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+  srvDesc.Texture2DArray.ArraySize = kShadowCascadeCount;
+  srvDesc.Texture2DArray.MipLevels = 1;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu(
+      cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(kShadowMapSrvIndex), cbvSrvDescriptorSize);
+  device->CreateShaderResourceView(mShadowMap.Get(), &srvDesc, shadowSrvCpu);
+}
+void RenderingSystem::UpdateCascadedShadowMapsData(
+    const DirectX::SimpleMath::Matrix& view,
+    const DirectX::SimpleMath::Matrix& proj) {
+  using namespace DirectX;
+  using namespace DirectX::SimpleMath;
+
+  const float cameraNear = 0.1f;
+  const float cameraFar = 1000.0f;
+  const float lambda = 0.5f;
+
+  std::array<float, kShadowCascadeCount> splits = {};
+  for (UINT i = 1; i <= kShadowCascadeCount; ++i) {
+    const float p =
+        static_cast<float>(i) / static_cast<float>(kShadowCascadeCount);
+    const float logSplit = cameraNear * std::pow(cameraFar / cameraNear, p);
+    const float linearSplit = cameraNear + (cameraFar - cameraNear) * p;
+    splits[i - 1] = lambda * logSplit + (1.0f - lambda) * linearSplit;
+  }
+  splits[kShadowCascadeCount - 1] = cameraFar;
+  mCascadeSplits = Vector4(splits[0], splits[1], splits[2], splits[3]);
+
+  Matrix invViewProj = (view * proj).Invert();
+  Vector3 frustumNear[4];
+  Vector3 frustumFar[4];
+  const float ndcX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+  const float ndcY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+  for (int i = 0; i < 4; ++i) {
+    frustumNear[i] =
+        Vector3::Transform(Vector3(ndcX[i], ndcY[i], 0.0f), invViewProj);
+    frustumFar[i] =
+        Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
+  }
+
+  Vector3 lightDir = Vector3(-0.35f, -1.0f, 0.1f);
+  lightDir.Normalize();
+  Vector3 up(0.0f, 1.0f, 0.0f);
+  if (std::abs(lightDir.Dot(up)) > 0.95f) {
+    up = Vector3(0.0f, 0.0f, 1.0f);
+  }
+
+  float previousSplit = cameraNear;
+  for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+    const float cascadeNear = previousSplit;
+    const float cascadeFar = splits[cascade];
+    previousSplit = cascadeFar;
+
+    const float nearRatio =
+        (cascadeNear - cameraNear) / (cameraFar - cameraNear);
+    const float farRatio = (cascadeFar - cameraNear) / (cameraFar - cameraNear);
+
+    Vector3 corners[8];
+    Vector3 center = Vector3::Zero;
+    for (int i = 0; i < 4; ++i) {
+      const Vector3 ray = frustumFar[i] - frustumNear[i];
+      corners[i] = frustumNear[i] + ray * nearRatio;
+      corners[i + 4] = frustumNear[i] + ray * farRatio;
+      center += corners[i] + corners[i + 4];
+    }
+    center /= 8.0f;
+
+    float radius = 0.0f;
+    for (const Vector3& corner : corners) {
+      radius = std::max(radius, (corner - center).Length());
+    }
+    const float lightDistance = radius + 250.0f;
+    const Vector3 eye = center - lightDir * lightDistance;
+    Matrix lightView = Matrix::CreateLookAt(eye, center, up);
+
+    Vector3 minB(FLT_MAX, FLT_MAX, FLT_MAX);
+    Vector3 maxB(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    for (const Vector3& corner : corners) {
+      Vector3 p = Vector3::Transform(corner, lightView);
+      minB.x = std::min(minB.x, p.x);
+      minB.y = std::min(minB.y, p.y);
+      minB.z = std::min(minB.z, p.z);
+      maxB.x = std::max(maxB.x, p.x);
+      maxB.y = std::max(maxB.y, p.y);
+      maxB.z = std::max(maxB.z, p.z);
+    }
+
+    const float width = maxB.x - minB.x;
+    const float height = maxB.y - minB.y;
+    const float texelX = width / static_cast<float>(kShadowMapResolution);
+    const float texelY = height / static_cast<float>(kShadowMapResolution);
+    float centerX = (minB.x + maxB.x) * 0.5f;
+    float centerY = (minB.y + maxB.y) * 0.5f;
+    centerX = std::floor(centerX / texelX) * texelX;
+    centerY = std::floor(centerY / texelY) * texelY;
+    minB.x = centerX - width * 0.5f;
+    maxB.x = centerX + width * 0.5f;
+    minB.y = centerY - height * 0.5f;
+    maxB.y = centerY + height * 0.5f;
+    minB.z -= 250.0f;
+    maxB.z += 250.0f;
+
+    Matrix lightProj = Matrix::CreateOrthographicOffCenter(
+        minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
+    mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
+  }
+}
+void RenderingSystem::RenderShadowPass(
+    ID3D12GraphicsCommandList* cmdList,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+    const ModelGeometry& modelGeometry,
+    const std::vector<SceneObject>& sceneObjects,
+    const std::vector<SubmeshInstance>& submeshInstances,
+    const std::vector<UINT>& visIndices) {
+  if (!mShadowMap || !mShadowPSO || !mShadowRootSignature || !mShadowFrameCB) {
+    return;
+  }
+
+  auto toDepth = CD3DX12_RESOURCE_BARRIER::Transition(
+      mShadowMap.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+      D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  cmdList->ResourceBarrier(1, &toDepth);
+
+  D3D12_VIEWPORT shadowViewport = {0.0f,
+                                   0.0f,
+                                   static_cast<float>(kShadowMapResolution),
+                                   static_cast<float>(kShadowMapResolution),
+                                   0.0f,
+                                   1.0f};
+  D3D12_RECT shadowScissor = {0, 0, static_cast<LONG>(kShadowMapResolution),
+                              static_cast<LONG>(kShadowMapResolution)};
+  cmdList->RSSetViewports(1, &shadowViewport);
+  cmdList->RSSetScissorRects(1, &shadowScissor);
+  cmdList->SetPipelineState(mShadowPSO.Get());
+  cmdList->SetGraphicsRootSignature(mShadowRootSignature.Get());
+  cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
+  cmdList->IASetIndexBuffer(&indexBufferView);
+  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+  for (UINT cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+    cmdList->ClearDepthStencilView(mShadowDsvHandles[cascade],
+                                   D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    cmdList->OMSetRenderTargets(0, nullptr, FALSE, &mShadowDsvHandles[cascade]);
+    void* shadowMapped = nullptr;
+    mShadowFrameCB->Map(0, nullptr, &shadowMapped);
+    memcpy(reinterpret_cast<std::uint8_t*>(shadowMapped) +
+               cascade * mShadowFrameCbStride,
+           &mShadowViewProj[cascade], sizeof(DirectX::SimpleMath::Matrix));
+    mShadowFrameCB->Unmap(0, nullptr);
+    cmdList->SetGraphicsRootConstantBufferView(
+        1, mShadowFrameCB->GetGPUVirtualAddress() +
+               cascade * mShadowFrameCbStride);
+
+    for (UINT visibleIndex : visIndices) {
+      if (visibleIndex >= submeshInstances.size()) {
+        continue;
+      }
+      const SubmeshInstance& instance = submeshInstances[visibleIndex];
+      if (instance.ObjectIndex >= sceneObjects.size() ||
+          instance.SubmeshIndex >= modelGeometry.Submeshes.size()) {
+        continue;
+      }
+      CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
+          mCbvSrvHeapGpuStart,
+          static_cast<INT>(kObjectCbvStart + instance.ObjectIndex),
+          mCbvSrvDescriptorSize);
+      cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
+
+      const auto& submesh = modelGeometry.Submeshes[instance.SubmeshIndex];
+      cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                    submesh.StartIndexLocation, 0, 0);
+    }
+  }
+
+  auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+      mShadowMap.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  cmdList->ResourceBarrier(1, &toSrv);
 }
