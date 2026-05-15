@@ -966,11 +966,11 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
     maxB.x = centerX + width * 0.5f;
     minB.y = centerY - height * 0.5f;
     maxB.y = centerY + height * 0.5f;
-    const float nearPlane = (std::max)(0.1f, minB.z - 250.0f);
-    const float farPlane = (std::max)(nearPlane + 1.0f, maxB.z + 250.0f);
+    minB.z -= 250.0f;
+    maxB.z += 250.0f;
 
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
-        minB.x, maxB.x, minB.y, maxB.y, nearPlane, farPlane);
+        minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
     mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
   }
 }
