@@ -978,7 +978,7 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
 
     Matrix lightProj = Matrix::CreateOrthographicOffCenter(
         minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
-    mShadowViewProj[cascade] = (lightView * lightProj).Transpose();
+    mShadowViewProj[cascade] = lightView * lightProj;  // без Transpose()
   }
 }
 void RenderingSystem::RenderShadowPass(
