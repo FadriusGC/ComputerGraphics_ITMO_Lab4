@@ -1105,6 +1105,12 @@ void BoxApp::CreateDepthStencil() {
       static_cast<INT>(RenderingSystem::kDepthSrvIndex), mCbvSrvDescriptorSize);
   mDevice->CreateShaderResourceView(mDepthStencilBuffer.Get(), &depthSrvDesc,
                                     depthSrvHandle);
+  CD3DX12_CPU_DESCRIPTOR_HANDLE gbufferDepthSrvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(RenderingSystem::kGBufferSrvStart + 2),
+      mCbvSrvDescriptorSize);
+  mDevice->CreateShaderResourceView(mDepthStencilBuffer.Get(), &depthSrvDesc,
+                                    gbufferDepthSrvHandle);
 
   auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
       mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON,
@@ -1370,7 +1376,7 @@ void BoxApp::Update(const GameTimer& gt) {
           Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
     }
 
-    Vector3 lightDir = Vector3(-0.35f, -1.0f, 0.1f);
+    Vector3 lightDir = Vector3(0.0f, -1.0f, 0.0f);
     lightDir.Normalize();
     Vector3 up(0.0f, 1.0f, 0.0f);
     if (std::abs(lightDir.Dot(up)) > 0.95f) {
@@ -1487,7 +1493,7 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   composeConstants.Lights[directionalLightIndex].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
+      DirectX::SimpleMath::Vector4(0.0f, -1.0f, 0.0f, 1.0f);
   composeConstants.Lights[directionalLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 
