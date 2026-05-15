@@ -49,7 +49,7 @@ uint GetCascadeIndex(float viewDepth) {
     return min(i, max((uint)gShadowParams.y, 1u) - 1u);
 }
 
-float GetShadowPCF(float3 worldPos, uint ci) {
+float GetShadowPCF(float3 worldPos, uint ci, float compareBias) {
     float4 sh = mul(float4(worldPos, 1.0f), gShadowViewProj[ci]);
     sh.xyz /= max(sh.w, 1e-6f);
 
@@ -67,19 +67,27 @@ float GetShadowPCF(float3 worldPos, uint ci) {
         [unroll]
         for (int x = -1; x <= 1; ++x) {
             float2 offset = float2((float)x, (float)y) * tex;
-            s += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + offset, ci), depth);
+            s += gShadowMap.SampleCmpLevelZero(gShadowSampler, float3(uv + offset, ci), depth - compareBias);
         }
     }
 
     return s / 9.0f;
 }
 
-float GetShadowFactor(float3 wp) {
+float GetShadowFactor(float3 wp, float3 n, float3 lightDir) {
     if ((uint)gShadowParams.z == 0 || (uint)gShadowParams.y == 0) {
         return 1.0f;
     }
     float4 vp = mul(float4(wp, 1.0f), gView);
-    float rawShadow = GetShadowPCF(wp, GetCascadeIndex(abs(vp.z)));
+    uint cascadeIndex = GetCascadeIndex(abs(vp.z));
+
+    float ndl = saturate(dot(n, lightDir));
+    float texelSize = 1.0f / max(gShadowParams.x, 1.0f);
+    float depthBias = max(0.0012f * (1.0f - ndl), 0.00008f);
+    float normalBias = (2.0f + (1.0f - ndl) * 2.0f) * texelSize;
+    float3 biasedWorldPos = wp + n * normalBias;
+
+    float rawShadow = GetShadowPCF(biasedWorldPos, cascadeIndex, depthBias);
     const float minLitInShadow = 0.28f;
     return lerp(minLitInShadow, 1.0f, saturate(rawShadow));
 }
@@ -91,7 +99,7 @@ float3 EvaluateLight(uint t, GpuLight Ld, float3 wp, float3 n, float3 v, float r
 
     if (t == LIGHT_TYPE_DIRECTIONAL) {
         L = normalize(-Ld.DirectionAndType.xyz);
-        att *= GetShadowFactor(wp);
+        att *= GetShadowFactor(wp, n, L);
     } else {
         float3 to = Ld.PositionWorldAndRange.xyz - wp;
         float d = length(to);

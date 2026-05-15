@@ -327,8 +327,8 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
                   mShadowPS->GetBufferSize()};
   shadowPso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
   shadowPso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-  shadowPso.RasterizerState.DepthBias = 2000;
-  shadowPso.RasterizerState.SlopeScaledDepthBias = 2.0f;
+  shadowPso.RasterizerState.DepthBias = 1000;
+  shadowPso.RasterizerState.SlopeScaledDepthBias = 0.5f;
   shadowPso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
   shadowPso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
   shadowPso.SampleMask = UINT_MAX;
