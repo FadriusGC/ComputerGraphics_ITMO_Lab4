@@ -907,7 +907,7 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
 
   // Must match the directional light used in compose pass, otherwise
   // CSM is rendered from one direction and sampled/ lit from another.
-  Vector3 lightDir = Vector3(0.0f, -1.0f, 0.0f);
+  Vector3 lightDir = mDirectionalLightDirection;
   lightDir.Normalize();
   Vector3 up(0.0f, 1.0f, 0.0f);
   if (std::abs(lightDir.Dot(up)) > 0.95f) {

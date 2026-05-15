@@ -59,6 +59,18 @@ class RenderingSystem {
   UINT GetShadowMapResolution() const { return kShadowMapResolution; }
   UINT GetShadowsEnabled() const { return mEnableShadows; }
 
+  const DirectX::SimpleMath::Vector3& GetDirectionalLightDirection() const {
+    return mDirectionalLightDirection;
+  }
+
+  const DirectX::SimpleMath::Vector3& GetDirectionalLightColor() const {
+    return mDirectionalLightColor;
+  }
+
+  float GetDirectionalLightIntensity() const {
+    return mDirectionalLightIntensity;
+  }
+
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
   void BuildComposeRootSignature(ID3D12Device* device);
@@ -190,4 +202,9 @@ class RenderingSystem {
   DirectX::SimpleMath::Vector4 mCascadeSplits = {0, 0, 0, 0};
   UINT mShadowFrameCbStride = 0;
   UINT mEnableShadows = 1;
+  DirectX::SimpleMath::Vector3 mDirectionalLightDirection =
+      DirectX::SimpleMath::Vector3(0.0f, -1.0f, 0.0f);
+  DirectX::SimpleMath::Vector3 mDirectionalLightColor =
+      DirectX::SimpleMath::Vector3(1.0f, 0.95f, 0.82f);
+  float mDirectionalLightIntensity = 1.6f;
 };

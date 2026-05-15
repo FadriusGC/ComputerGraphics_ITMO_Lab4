@@ -1402,10 +1402,20 @@ void BoxApp::Update(const GameTimer& gt) {
   // Directional: солнце типо
   composeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  const auto directionalLightDirection =
+      mRenderingSystem.GetDirectionalLightDirection();
+  const auto directionalLightColor =
+      mRenderingSystem.GetDirectionalLightColor();
+  const float directionalLightIntensity =
+      mRenderingSystem.GetDirectionalLightIntensity();
   composeConstants.Lights[directionalLightIndex].DirectionAndType =
-      DirectX::SimpleMath::Vector4(0.0f, -1.0f, 0.0f, 1.0f);
+      DirectX::SimpleMath::Vector4(directionalLightDirection.x,
+                                   directionalLightDirection.y,
+                                   directionalLightDirection.z, 1.0f);
   composeConstants.Lights[directionalLightIndex].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
+      DirectX::SimpleMath::Vector4(
+          directionalLightColor.x, directionalLightColor.y,
+          directionalLightColor.z, directionalLightIntensity);
 
   // Spot #1: спот щеленый
   composeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =
