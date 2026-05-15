@@ -653,6 +653,8 @@ void RenderingSystem::Render(
   RenderShadowPass(cmdList, vertexBufferView, indexBufferView, modelGeometry,
                    sceneObjects, submeshInstances,
                    visibleSubmeshInstanceIndices);
+  cmdList->RSSetViewports(1, &viewport);
+  cmdList->RSSetScissorRects(1, &scissorRect);
 
   cmdList->SetPipelineState(mGeometryPSO.Get());
   cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
@@ -833,9 +835,10 @@ void RenderingSystem::BuildShadowPassResources(ID3D12Device* device,
   D3D12_CLEAR_VALUE clearValue = {};
   clearValue.Format = DXGI_FORMAT_D32_FLOAT;
   clearValue.DepthStencil.Depth = 1.0f;
+  const CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
   ThrowIfFailed(device->CreateCommittedResource(
-      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
-      &shadowDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue,
+      &defaultHeap, D3D12_HEAP_FLAG_NONE, &shadowDesc,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue,
       IID_PPV_ARGS(&mShadowMap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};

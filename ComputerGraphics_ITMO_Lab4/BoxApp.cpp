@@ -1341,103 +1341,107 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.InvViewProj = viewProj.Invert().Transpose();
   composeConstants.View = mView.Transpose();
   {
-      using namespace DirectX::SimpleMath;
-      const float cameraNear = 0.1f;
-      const float cameraFar = 1000.0f;
-      const float lambda = 0.5f;
+    using namespace DirectX::SimpleMath;
+    const float cameraNear = 0.1f;
+    const float cameraFar = 1000.0f;
+    const float lambda = 0.5f;
 
-      std::array<float, ComposeConstants::kShadowCascadeCount> splits = {};
-      for (int i = 1; i <= ComposeConstants::kShadowCascadeCount; ++i) {
-          const float p = static_cast<float>(i) /
-              static_cast<float>(ComposeConstants::kShadowCascadeCount);
-          const float logSplit = cameraNear * std::pow(cameraFar / cameraNear, p);
-          const float linearSplit = cameraNear + (cameraFar - cameraNear) * p;
-          splits[i - 1] = lambda * logSplit + (1.0f - lambda) * linearSplit;
-      }
-      splits[ComposeConstants::kShadowCascadeCount - 1] = cameraFar;
-      composeConstants.CascadeSplits =
-          Vector4(splits[0], splits[1], splits[2], splits[3]);
+    std::array<float, ComposeConstants::kShadowCascadeCount> splits = {};
+    for (int i = 1; i <= ComposeConstants::kShadowCascadeCount; ++i) {
+      const float p = static_cast<float>(i) /
+                      static_cast<float>(ComposeConstants::kShadowCascadeCount);
+      const float logSplit = cameraNear * std::pow(cameraFar / cameraNear, p);
+      const float linearSplit = cameraNear + (cameraFar - cameraNear) * p;
+      splits[i - 1] = lambda * logSplit + (1.0f - lambda) * linearSplit;
+    }
+    splits[ComposeConstants::kShadowCascadeCount - 1] = cameraFar;
+    composeConstants.CascadeSplits =
+        Vector4(splits[0], splits[1], splits[2], splits[3]);
 
-      Matrix invViewProj = (mView * mProj).Invert();
-      Vector3 frustumNear[4];
-      Vector3 frustumFar[4];
-      const float ndcX[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
-      const float ndcY[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
+    Matrix invViewProj = (mView * mProj).Invert();
+    Vector3 frustumNear[4];
+    Vector3 frustumFar[4];
+    const float ndcX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+    const float ndcY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < 4; ++i) {
+      frustumNear[i] =
+          Vector3::Transform(Vector3(ndcX[i], ndcY[i], 0.0f), invViewProj);
+      frustumFar[i] =
+          Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
+    }
+
+    Vector3 lightDir = Vector3(-0.35f, -1.0f, 0.1f);
+    lightDir.Normalize();
+    Vector3 up(0.0f, 1.0f, 0.0f);
+    if (std::abs(lightDir.Dot(up)) > 0.95f) {
+      up = Vector3(0.0f, 0.0f, 1.0f);
+    }
+
+    float previousSplit = cameraNear;
+    for (int cascade = 0; cascade < ComposeConstants::kShadowCascadeCount;
+         ++cascade) {
+      const float cascadeNear = previousSplit;
+      const float cascadeFar = splits[cascade];
+      previousSplit = cascadeFar;
+
+      const float nearRatio =
+          (cascadeNear - cameraNear) / (cameraFar - cameraNear);
+      const float farRatio =
+          (cascadeFar - cameraNear) / (cameraFar - cameraNear);
+
+      Vector3 corners[8];
+      Vector3 center = Vector3::Zero;
       for (int i = 0; i < 4; ++i) {
-          frustumNear[i] =
-              Vector3::Transform(Vector3(ndcX[i], ndcY[i], 0.0f), invViewProj);
-          frustumFar[i] =
-              Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
+        const Vector3 ray = frustumFar[i] - frustumNear[i];
+        corners[i] = frustumNear[i] + ray * nearRatio;
+        corners[i + 4] = frustumNear[i] + ray * farRatio;
+        center += corners[i] + corners[i + 4];
+      }
+      center /= 8.0f;
+
+      float radius = 0.0f;
+      for (int i = 0; i < 8; ++i) {
+        radius = std::max(radius, (corners[i] - center).Length());
+      }
+      const float lightDistance = radius + 250.0f;
+      const Vector3 eye = center - lightDir * lightDistance;
+      Matrix lightView = Matrix::CreateLookAt(eye, center, up);
+
+      Vector3 minB(FLT_MAX, FLT_MAX, FLT_MAX);
+      Vector3 maxB(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+      for (int i = 0; i < 8; ++i) {
+        Vector3 p = Vector3::Transform(corners[i], lightView);
+        minB.x = std::min(minB.x, p.x);
+        minB.y = std::min(minB.y, p.y);
+        minB.z = std::min(minB.z, p.z);
+        maxB.x = std::max(maxB.x, p.x);
+        maxB.y = std::max(maxB.y, p.y);
+        maxB.z = std::max(maxB.z, p.z);
       }
 
-      Vector3 lightDir = Vector3(-0.35f, -1.0f, 0.1f);
-      lightDir.Normalize();
-      Vector3 up(0.0f, 1.0f, 0.0f);
-      if (std::abs(lightDir.Dot(up)) > 0.95f) {
-          up = Vector3(0.0f, 0.0f, 1.0f);
-      }
+      const float width = maxB.x - minB.x;
+      const float height = maxB.y - minB.y;
+      const float texelX = width / 2048.0f;
+      const float texelY = height / 2048.0f;
+      float centerX = (minB.x + maxB.x) * 0.5f;
+      float centerY = (minB.y + maxB.y) * 0.5f;
+      centerX = std::floor(centerX / texelX) * texelX;
+      centerY = std::floor(centerY / texelY) * texelY;
+      minB.x = centerX - width * 0.5f;
+      maxB.x = centerX + width * 0.5f;
+      minB.y = centerY - height * 0.5f;
+      maxB.y = centerY + height * 0.5f;
+      minB.z -= 250.0f;
+      maxB.z += 250.0f;
 
-      float previousSplit = cameraNear;
-      for (int cascade = 0; cascade < ComposeConstants::kShadowCascadeCount;
-          ++cascade) {
-          const float cascadeNear = previousSplit;
-          const float cascadeFar = splits[cascade];
-          previousSplit = cascadeFar;
-
-          const float nearRatio = (cascadeNear - cameraNear) / (cameraFar - cameraNear);
-          const float farRatio = (cascadeFar - cameraNear) / (cameraFar - cameraNear);
-
-          Vector3 corners[8];
-          Vector3 center = Vector3::Zero;
-          for (int i = 0; i < 4; ++i) {
-              const Vector3 ray = frustumFar[i] - frustumNear[i];
-              corners[i] = frustumNear[i] + ray * nearRatio;
-              corners[i + 4] = frustumNear[i] + ray * farRatio;
-              center += corners[i] + corners[i + 4];
-          }
-          center /= 8.0f;
-
-          float radius = 0.0f;
-          for (int i = 0; i < 8; ++i) {
-              radius = std::max(radius, (corners[i] - center).Length());
-          }
-          const float lightDistance = radius + 250.0f;
-          const Vector3 eye = center - lightDir * lightDistance;
-          Matrix lightView = Matrix::CreateLookAt(eye, center, up);
-
-          Vector3 minB(FLT_MAX, FLT_MAX, FLT_MAX);
-          Vector3 maxB(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-          for (int i = 0; i < 8; ++i) {
-              Vector3 p = Vector3::Transform(corners[i], lightView);
-              minB.x = std::min(minB.x, p.x);
-              minB.y = std::min(minB.y, p.y);
-              minB.z = std::min(minB.z, p.z);
-              maxB.x = std::max(maxB.x, p.x);
-              maxB.y = std::max(maxB.y, p.y);
-              maxB.z = std::max(maxB.z, p.z);
-          }
-
-          const float width = maxB.x - minB.x;
-          const float height = maxB.y - minB.y;
-          const float texelX = width / 2048.0f;
-          const float texelY = height / 2048.0f;
-          float centerX = (minB.x + maxB.x) * 0.5f;
-          float centerY = (minB.y + maxB.y) * 0.5f;
-          centerX = std::floor(centerX / texelX) * texelX;
-          centerY = std::floor(centerY / texelY) * texelY;
-          minB.x = centerX - width * 0.5f;
-          maxB.x = centerX + width * 0.5f;
-          minB.y = centerY - height * 0.5f;
-          maxB.y = centerY + height * 0.5f;
-          minB.z -= 250.0f;
-          maxB.z += 250.0f;
-
-          Matrix lightProj = Matrix::CreateOrthographicOffCenter(
-              minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
-          composeConstants.ShadowViewProj[cascade] = (lightView * lightProj).Transpose();
-      }
+      Matrix lightProj = Matrix::CreateOrthographicOffCenter(
+          minB.x, maxB.x, minB.y, maxB.y, minB.z, maxB.z);
+      composeConstants.ShadowViewProj[cascade] =
+          (lightView * lightProj).Transpose();
+    }
   }
-  composeConstants.ShadowParams = DirectX::SimpleMath::Vector4(2048.0f, 4.0f, 1.0f, 0.0f);
+  composeConstants.ShadowParams =
+      DirectX::SimpleMath::Vector4(2048.0f, 4.0f, 1.0f, 0.0f);
   composeConstants.CameraPosition =
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
   composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(

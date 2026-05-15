@@ -79,7 +79,9 @@ float GetShadowFactor(float3 wp) {
         return 1.0f;
     }
     float4 vp = mul(float4(wp, 1.0f), gView);
-    return GetShadowPCF(wp, GetCascadeIndex(abs(vp.z)));
+    float rawShadow = GetShadowPCF(wp, GetCascadeIndex(abs(vp.z)));
+    const float minLitInShadow = 0.28f;
+    return lerp(minLitInShadow, 1.0f, saturate(rawShadow));
 }
 
 float3 EvaluateLight(uint t, GpuLight Ld, float3 wp, float3 n, float3 v, float rough) {
