@@ -899,10 +899,17 @@ void RenderingSystem::UpdateCascadedShadowMapsData(
   const float ndcX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
   const float ndcY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
   for (int i = 0; i < 4; ++i) {
-    frustumNear[i] =
-        Vector3::Transform(Vector3(ndcX[i], ndcY[i], 0.0f), invViewProj);
-    frustumFar[i] =
-        Vector3::Transform(Vector3(ndcX[i], ndcY[i], 1.0f), invViewProj);
+    Vector4 nearClip(ndcX[i], ndcY[i], 0.0f, 1.0f);
+    Vector4 farClip(ndcX[i], ndcY[i], 1.0f, 1.0f);
+
+    Vector4 nearWorld = Vector4::Transform(nearClip, invViewProj);
+    Vector4 farWorld = Vector4::Transform(farClip, invViewProj);
+
+    nearWorld /= nearWorld.w;
+    farWorld /= farWorld.w;
+
+    frustumNear[i] = Vector3(nearWorld.x, nearWorld.y, nearWorld.z);
+    frustumFar[i] = Vector3(farWorld.x, farWorld.y, farWorld.z);
   }
 
   // Must match the directional light used in compose pass, otherwise
