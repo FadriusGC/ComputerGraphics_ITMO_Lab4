@@ -57,6 +57,81 @@ DirectX::BoundingBox TransformBoundingBox(
   DirectX::BoundingBox::CreateFromPoints(worldBounds, minCorner, maxCorner);
   return worldBounds;
 }
+
+DirectX::SimpleMath::Vector3 GetFrustumCornerWorld(
+    const DirectX::SimpleMath::Matrix& invViewProj, float ndcX, float ndcY,
+    float ndcZ) {
+  const DirectX::SimpleMath::Vector4 clip(ndcX, ndcY, ndcZ, 1.0f);
+  DirectX::SimpleMath::Vector4 world =
+      DirectX::SimpleMath::Vector4::Transform(clip, invViewProj);
+  world /= world.w;
+  return DirectX::SimpleMath::Vector3(world.x, world.y, world.z);
+}
+
+void ComputeCascadeShadowTransform(
+    const DirectX::SimpleMath::Matrix& view,
+    const DirectX::SimpleMath::Matrix& proj,
+    const DirectX::SimpleMath::Vector3& lightDir, float splitNear,
+    float splitFar, float mapResolution,
+    DirectX::SimpleMath::Matrix& outShadowTransform) {
+  const auto invViewProj = (view * proj).Invert();
+
+  std::array<DirectX::SimpleMath::Vector3, 8> frustumCorners = {
+      GetFrustumCornerWorld(invViewProj, -1.0f, -1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, +1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, +1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, -1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, -1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, +1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, +1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, -1.0f, 1.0f)};
+
+  const float cameraNear = 0.1f;
+  const float cameraFar = 1000.0f;
+  const float nearFactor = (splitNear - cameraNear) / (cameraFar - cameraNear);
+  const float farFactor = (splitFar - cameraNear) / (cameraFar - cameraNear);
+
+  std::array<DirectX::SimpleMath::Vector3, 8> cascadeCorners;
+  for (int i = 0; i < 4; ++i) {
+    const auto ray = frustumCorners[i + 4] - frustumCorners[i];
+    cascadeCorners[i] = frustumCorners[i] + ray * nearFactor;
+    cascadeCorners[i + 4] = frustumCorners[i] + ray * farFactor;
+  }
+
+  DirectX::SimpleMath::Vector3 center(0, 0, 0);
+  for (const auto& c : cascadeCorners) center += c;
+  center /= 8.0f;
+
+  float radius = 0.0f;
+  for (const auto& c : cascadeCorners) {
+    radius = std::max(radius, (c - center).Length());
+  }
+  radius = std::ceil(radius * 16.0f) / 16.0f;
+
+  const auto lightPos = center - lightDir * (radius * 2.0f);
+  const auto lightView = DirectX::SimpleMath::Matrix::CreateLookAt(
+      lightPos, center, DirectX::SimpleMath::Vector3::Up);
+
+  DirectX::SimpleMath::Vector3 centerLS =
+      DirectX::SimpleMath::Vector3::Transform(center, lightView);
+  const float texelSize = (2.0f * radius) / mapResolution;
+  centerLS.x = std::floor(centerLS.x / texelSize) * texelSize;
+  centerLS.y = std::floor(centerLS.y / texelSize) * texelSize;
+
+  const auto snappedCenterWS =
+      DirectX::SimpleMath::Vector3::Transform(centerLS, lightView.Invert());
+  const auto snappedLightPos = snappedCenterWS - lightDir * (radius * 2.0f);
+  const auto snappedLightView = DirectX::SimpleMath::Matrix::CreateLookAt(
+      snappedLightPos, snappedCenterWS, DirectX::SimpleMath::Vector3::Up);
+
+  const auto lightProj =
+      DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
+          -radius, radius, -radius, radius, 0.0f, radius * 4.0f);
+  const DirectX::SimpleMath::Matrix tex(0.5f, 0.0f, 0.0f, 0.0f, 0.0f, -0.5f,
+                                        0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                        0.5f, 0.5f, 0.0f, 1.0f);
+  outShadowTransform = (snappedLightView * lightProj * tex).Transpose();
+}
 }  // namespace
 
 BoxApp::BoxApp(HINSTANCE hInstance)
@@ -196,7 +271,7 @@ void BoxApp::BuildDescriptorHeaps() {
       mDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC samplerHeapDesc = {};
-  samplerHeapDesc.NumDescriptors = 1;
+  samplerHeapDesc.NumDescriptors = 2;
   samplerHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
   samplerHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(mDevice->CreateDescriptorHeap(&samplerHeapDesc,
@@ -943,8 +1018,24 @@ void BoxApp::CreateSamplerHeap() {
   samplerDesc.MaxAnisotropy = 1;
   samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
 
-  mDevice->CreateSampler(&samplerDesc,
-                         mSamplerHeap->GetCPUDescriptorHandleForHeapStart());
+  auto base = mSamplerHeap->GetCPUDescriptorHandleForHeapStart();
+  mDevice->CreateSampler(&samplerDesc, base);
+
+  D3D12_SAMPLER_DESC shadowSampler = samplerDesc;
+  shadowSampler.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+  shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+  shadowSampler.BorderColor[0] = 1.0f;
+  shadowSampler.BorderColor[1] = 1.0f;
+  shadowSampler.BorderColor[2] = 1.0f;
+  shadowSampler.BorderColor[3] = 1.0f;
+  auto offset =
+      CD3DX12_CPU_DESCRIPTOR_HANDLE(base, 1,
+                                    mDevice->GetDescriptorHandleIncrementSize(
+                                        D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
+  mDevice->CreateSampler(&shadowSampler, offset);
 }
 
 void BoxApp::BuildPSO() {
@@ -1351,6 +1442,21 @@ void BoxApp::Update(const GameTimer& gt) {
   composeConstants.LightCount = DirectX::SimpleMath::Vector4(
       static_cast<float>(mFallingLights.size() + kStaticLightCount), 0.0f, 0.0f,
       0.0f);
+
+  composeConstants.CascadeSplits =
+      DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
+
+  const DirectX::SimpleMath::Vector3 lightDir =
+      DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
+  const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
+                                                                600.0f};
+  float previousSplit = 0.1f;
+  for (int i = 0; i < ComposeConstants::kCascadeCount; ++i) {
+    ComputeCascadeShadowTransform(mView, mProj, lightDir, previousSplit,
+                                  cascadeRanges[i], 2048.0f,
+                                  composeConstants.ShadowTransforms[i]);
+    previousSplit = cascadeRanges[i];
+  }
 
   // Падающие point lights с приземлением на пол. занимают lights[0-3]
   const float deltaTime = gt.DeltaTime();

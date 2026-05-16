@@ -10,10 +10,13 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
   BuildInputLayout();
   BuildGeometryRootSignature(device);
   BuildComposeRootSignature(device);
+  BuildShadowRootSignature(device);
   BuildParticlesComputeRootSignature(device);
   BuildParticlesRenderRootSignature(device);
   BuildGeometryPSO(device);
   BuildComposePSO(device);
+  mShadowPassCB = std::make_unique<UploadBuffer<DirectX::SimpleMath::Matrix>>(
+      device, ShadowMap::kCascadeCount, true);
   BuildParticlesEmitPSO(device);
   BuildParticlesInitPSO(device);
   BuildParticlesSimulatePSO(device);
@@ -23,6 +26,8 @@ void RenderingSystem::Initialize(ID3D12Device* device, UINT width, UINT height,
                       rtvDescriptorSize, cbvSrvDescriptorSize, kGBufferRtvStart,
                       kGBufferSrvStart);
   BuildParticleResources(device, cbvSrvHeap, cbvSrvDescriptorSize);
+  mShadowMap.Initialize(device, 2048, 2048, cbvSrvHeap, kShadowMapSrvIndex,
+                        cbvSrvDescriptorSize);
 }
 
 void RenderingSystem::BuildShaders() {
@@ -50,6 +55,10 @@ void RenderingSystem::BuildShaders() {
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/DeferredComposePS.hlsl",
       "PS", "ps_5_0");
+  mShadowVS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ShadowVS.hlsl",
+      "VS", "vs_5_0");
   mParticlesEmitCS = ShaderHelper::CompileShader(
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/ParticleEmitCS.hlsl",
@@ -134,20 +143,24 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[3];
+  CD3DX12_ROOT_PARAMETER params[4];
 
   CD3DX12_DESCRIPTOR_RANGE gbufferSrvTable;
   gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
   params[0].InitAsDescriptorTable(1, &gbufferSrvTable);
 
-  CD3DX12_DESCRIPTOR_RANGE samplerTable;
-  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
-  params[1].InitAsDescriptorTable(1, &samplerTable);
+  CD3DX12_DESCRIPTOR_RANGE shadowSrvTable;
+  shadowSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3);
+  params[1].InitAsDescriptorTable(1, &shadowSrvTable);
 
-  params[2].InitAsConstantBufferView(0);
+  CD3DX12_DESCRIPTOR_RANGE samplerTable;
+  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 2, 0);
+  params[2].InitAsDescriptorTable(1, &samplerTable);
+
+  params[3].InitAsConstantBufferView(0);
 
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      3, params, 0, nullptr,
+      4, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -157,6 +170,25 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
   ThrowIfFailed(device->CreateRootSignature(
       0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
       IID_PPV_ARGS(&mComposeRootSignature)));
+}
+
+void RenderingSystem::BuildShadowRootSignature(ID3D12Device* device) {
+  CD3DX12_ROOT_PARAMETER params[2];
+  CD3DX12_DESCRIPTOR_RANGE cbvTable0;
+  cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+  params[0].InitAsDescriptorTable(1, &cbvTable0);
+  params[1].InitAsConstantBufferView(1);
+
+  CD3DX12_ROOT_SIGNATURE_DESC desc(
+      2, params, 0, nullptr,
+      D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+  ComPtr<ID3DBlob> serialized;
+  ComPtr<ID3DBlob> error;
+  ThrowIfFailed(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                            &serialized, &error));
+  ThrowIfFailed(device->CreateRootSignature(
+      0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
+      IID_PPV_ARGS(&mShadowRootSignature)));
 }
 
 void RenderingSystem::BuildParticlesComputeRootSignature(ID3D12Device* device) {
@@ -267,6 +299,22 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
 
   ThrowIfFailed(
       device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mComposePSO)));
+
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPso = pso;
+  shadowPso.pRootSignature = mShadowRootSignature.Get();
+  shadowPso.VS = {reinterpret_cast<BYTE*>(mShadowVS->GetBufferPointer()),
+                  mShadowVS->GetBufferSize()};
+  shadowPso.HS = {nullptr, 0};
+  shadowPso.DS = {nullptr, 0};
+  shadowPso.PS = {nullptr, 0};
+  shadowPso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  shadowPso.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+  shadowPso.NumRenderTargets = 0;
+  shadowPso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+  shadowPso.RasterizerState.DepthBias = 100000;
+  shadowPso.RasterizerState.SlopeScaledDepthBias = 1.0f;
+  ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowPso,
+                                                    IID_PPV_ARGS(&mShadowPSO)));
 }
 
 void RenderingSystem::BuildParticlesEmitPSO(ID3D12Device* device) {
@@ -545,6 +593,47 @@ void RenderingSystem::RenderParticles(ID3D12GraphicsCommandList* cmdList) {
   cmdList->DrawInstanced(kParticleMaxCount, 1, 0, 0);
 }
 
+void RenderingSystem::DrawSceneToShadowMaps(
+    ID3D12GraphicsCommandList* cmdList,
+    const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+    const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+    const ModelGeometry& modelGeometry,
+    const std::vector<SubmeshInstance>& submeshInstances,
+    const std::vector<UINT>& visibleSubmeshInstanceIndices, UINT cascadeIndex) {
+  cmdList->RSSetViewports(1, &mShadowMap.Viewport());
+  cmdList->RSSetScissorRects(1, &mShadowMap.ScissorRect());
+  auto toWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+      mShadowMap.Resource(), D3D12_RESOURCE_STATE_GENERIC_READ,
+      D3D12_RESOURCE_STATE_DEPTH_WRITE);
+  cmdList->ResourceBarrier(1, &toWrite);
+  cmdList->ClearDepthStencilView(mShadowMap.Dsv(cascadeIndex),
+                                 D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+  cmdList->OMSetRenderTargets(0, nullptr, false, &mShadowMap.Dsv(cascadeIndex));
+  cmdList->SetPipelineState(mShadowPSO.Get());
+  cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+  auto passAddress =
+      mShadowPassCB->Resource()->GetGPUVirtualAddress() + cascadeIndex * 256;
+  cmdList->SetGraphicsRootConstantBufferView(1, passAddress);
+  cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
+  cmdList->IASetIndexBuffer(&indexBufferView);
+  cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
+    if (visibleInstanceIndex >= submeshInstances.size()) continue;
+    const auto& si = submeshInstances[visibleInstanceIndex];
+    CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
+        mCbvSrvHeapGpuStart, static_cast<INT>(kObjectCbvStart + si.ObjectIndex),
+        mCbvSrvDescriptorSize);
+    cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
+    const auto& submesh = modelGeometry.Submeshes[si.SubmeshIndex];
+    cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
+                                  submesh.StartIndexLocation, 0, 0);
+  }
+  auto toRead = CD3DX12_RESOURCE_BARRIER::Transition(
+      mShadowMap.Resource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+      D3D12_RESOURCE_STATE_GENERIC_READ);
+  cmdList->ResourceBarrier(1, &toRead);
+}
+
 void RenderingSystem::Render(
     ID3D12GraphicsCommandList* cmdList,
     D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv, ID3D12Resource* backBuffer,
@@ -558,7 +647,8 @@ void RenderingSystem::Render(
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visibleSubmeshInstanceIndices,
     UploadBuffer<MaterialConstants>* materialCB, ID3D12Resource* depthBuffer,
-    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+    D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+    const ComposeConstants& composeConstants, float deltaTime,
     const DirectX::SimpleMath::Matrix& viewProj,
     const DirectX::SimpleMath::Vector3& cameraPosition) {
   cmdList->RSSetViewports(1, &viewport);
@@ -577,8 +667,19 @@ void RenderingSystem::Render(
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);
 
+  for (UINT cascade = 0; cascade < ShadowMap::kCascadeCount; ++cascade) {
+    mShadowPassCB->CopyData(static_cast<int>(cascade),
+                            composeConstants.ShadowTransforms[cascade]);
+  }
+
+  for (UINT cascade = 0; cascade < ShadowMap::kCascadeCount; ++cascade) {
+    DrawSceneToShadowMaps(cmdList, vertexBufferView, indexBufferView,
+                          modelGeometry, submeshInstances,
+                          visibleSubmeshInstanceIndices, cascade);
+  }
+
   cmdList->SetPipelineState(mGeometryPSO.Get());
-  cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+  cmdList->SetGraphicsRootSignature(mShadowRootSignature.Get());
 
   mGBuffer.BeginGeometryPass(cmdList, dsvHandle);
 
@@ -709,9 +810,13 @@ void RenderingSystem::Render(
   cmdList->SetPipelineState(mComposePSO.Get());
   cmdList->SetGraphicsRootSignature(mComposeRootSignature.Get());
   cmdList->SetGraphicsRootDescriptorTable(0, mGBuffer.GetSrvStartGpuHandle());
+  CD3DX12_GPU_DESCRIPTOR_HANDLE shadowSrv(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(kShadowMapSrvIndex), cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(1, shadowSrv);
   cmdList->SetGraphicsRootDescriptorTable(
-      1, samplerHeap->GetGPUDescriptorHandleForHeapStart());
-  cmdList->SetGraphicsRootConstantBufferView(2, composeCBAddress);
+      2, samplerHeap->GetGPUDescriptorHandleForHeapStart());
+  cmdList->SetGraphicsRootConstantBufferView(3, composeCBAddress);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
 
