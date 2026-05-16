@@ -33,28 +33,34 @@ cbuffer cbCompose : register(b0) {
     GpuLight gLights[MAX_LIGHTS];
 };
 
-float3 ReconstructWorldPos(float2 uv, float depth) {
-    float4 ndc = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, depth, 1.0f);
-    float4 worldPos = mul(ndc, gInvViewProj);
-    return worldPos.xyz / max(worldPos.w, 1e-6f);
+float3 ReconstructWorldPos(float2 uv, float depth, out float linearDepth) {
+    float x = uv.x * 2.0f - 1.0f;
+    float y = (1.0f - uv.y) * 2.0f - 1.0f;
+
+    float4 ndcPos = float4(x, y, depth, 1.0f);
+    float4 worldPos = mul(ndcPos, gInvViewProj);
+
+    linearDepth = abs(1.0f / max(worldPos.w, 1e-6f));
+    return worldPos.xyz / worldPos.w;
 }
 
-float CalcShadowFactor(float3 worldPos) {
-    uint cascade = CASCADE_COUNT;
-    float4 shadowPosH = 0.0f;
+float CalcShadowFactor(float3 worldPos, float pixelDepth) {
+    uint cascade = 0;
     [unroll]
-    for (uint i = 0; i < CASCADE_COUNT; ++i) {
-        float4 testPos = mul(float4(worldPos, 1.0f), gShadowTransforms[i]);
-        testPos.xyz /= testPos.w;
-        if (testPos.x >= 0.0f && testPos.x <= 1.0f &&
-            testPos.y >= 0.0f && testPos.y <= 1.0f &&
-            testPos.z >= 0.0f && testPos.z <= 1.0f) {
-            cascade = i;
-            shadowPosH = testPos;
-            break;
+    for (uint i = 0; i < CASCADE_COUNT - 1; ++i) {
+        if (pixelDepth > gCascadeSplits[i]) {
+            cascade = i + 1;
         }
     }
-    if (cascade >= CASCADE_COUNT) return 1.0f;
+    cascade = min(cascade, CASCADE_COUNT - 1);
+
+    float4 shadowPosH = mul(float4(worldPos, 1.0f), gShadowTransforms[cascade]);
+    shadowPosH.xyz /= shadowPosH.w;
+    if (shadowPosH.x < 0.0f || shadowPosH.x > 1.0f ||
+        shadowPosH.y < 0.0f || shadowPosH.y > 1.0f ||
+        shadowPosH.z < 0.0f || shadowPosH.z > 1.0f) {
+        return 1.0f;
+    }
 
     uint w, h, elements;
     gShadowMap.GetDimensions(w, h, elements);
@@ -108,8 +114,14 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation;
     float3 specular = radiance * spec * specStrength;
 
-    float directionalShadow = (lightType == LIGHT_TYPE_DIRECTIONAL) ? shadowFactor : 1.0f;
-    return directionalShadow * (diffuse + specular);
+   if (lightType == LIGHT_TYPE_DIRECTIONAL) {
+        float3 shadowTint = float3(0.0f, 0.0f, 0.0f);
+        float3 shadowMod = lerp(shadowTint * 2.0f, float3(1.0f, 1.0f, 1.0f), shadowFactor);
+        diffuse *= shadowMod;
+        specular *= shadowFactor;
+    }
+
+    return diffuse + specular;
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
@@ -120,9 +132,10 @@ float4 PS(PS_INPUT input) : SV_Target {
 
     float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
     float roughness = saturate(normalSample.a);
-    float3 worldPos = ReconstructWorldPos(input.TexC, depth);
+    float pixelDepth = 0.0f;
+    float3 worldPos = ReconstructWorldPos(input.TexC, depth, pixelDepth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
-    float shadowFactor = CalcShadowFactor(worldPos);
+    float shadowFactor = CalcShadowFactor(worldPos, pixelDepth);
 
     float3 color = albedo.rgb * 0.05f;
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
