@@ -40,8 +40,9 @@ float3 ReconstructWorldPos(float2 uv, float depth, out float linearDepth) {
     float4 ndcPos = float4(x, y, depth, 1.0f);
     float4 worldPos = mul(ndcPos, gInvViewProj);
 
-    linearDepth = abs(1.0f / max(worldPos.w, 1e-6f));
-    return worldPos.xyz / worldPos.w;
+    float3 world = worldPos.xyz / worldPos.w;
+    linearDepth = distance(world, gCameraPosition.xyz);
+    return world;
 }
 
 float CalcShadowFactor(float3 worldPos, float pixelDepth) {
@@ -138,7 +139,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     float shadowFactor = CalcShadowFactor(worldPos, pixelDepth);
 
     float3 color = albedo.rgb * 0.05f;
-    if (shadowFactor < 1.0f) return float4(1.0, 0.0, 0.0, 1.0); //отладка, при залете в затененные области красный экран
+    //if (shadowFactor < 1.0f) return float4(1.0, 0.0, 0.0, 1.0); //отладка, при залете в затененные области красный экран
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
 
     [loop]
