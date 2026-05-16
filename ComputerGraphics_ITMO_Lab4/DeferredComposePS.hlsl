@@ -39,16 +39,22 @@ float3 ReconstructWorldPos(float2 uv, float depth) {
     return worldPos.xyz / max(worldPos.w, 1e-6f);
 }
 
-float CalcShadowFactor(float3 worldPos, float viewDepth) {
-    uint cascade = 0;
-    if (viewDepth > gCascadeSplits.x) cascade = 1;
-    if (viewDepth > gCascadeSplits.y) cascade = 2;
-
-    float4 shadowPosH = mul(float4(worldPos, 1.0f), gShadowTransforms[cascade]);
-    shadowPosH.xyz /= shadowPosH.w;
-
-    if (shadowPosH.x < 0 || shadowPosH.x > 1 || shadowPosH.y < 0 || shadowPosH.y > 1 || shadowPosH.z < 0 || shadowPosH.z > 1)
-        return 1.0f;
+float CalcShadowFactor(float3 worldPos) {
+    uint cascade = CASCADE_COUNT;
+    float4 shadowPosH = 0.0f;
+    [unroll]
+    for (uint i = 0; i < CASCADE_COUNT; ++i) {
+        float4 testPos = mul(float4(worldPos, 1.0f), gShadowTransforms[i]);
+        testPos.xyz /= testPos.w;
+        if (testPos.x >= 0.0f && testPos.x <= 1.0f &&
+            testPos.y >= 0.0f && testPos.y <= 1.0f &&
+            testPos.z >= 0.0f && testPos.z <= 1.0f) {
+            cascade = i;
+            shadowPosH = testPos;
+            break;
+        }
+    }
+    if (cascade >= CASCADE_COUNT) return 1.0f;
 
     uint w, h, elements;
     gShadowMap.GetDimensions(w, h, elements);
@@ -116,8 +122,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     float roughness = saturate(normalSample.a);
     float3 worldPos = ReconstructWorldPos(input.TexC, depth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
-    float viewDepth = length(gCameraPosition.xyz - worldPos);
-    float shadowFactor = CalcShadowFactor(worldPos, viewDepth);
+    float shadowFactor = CalcShadowFactor(worldPos);
 
     float3 color = albedo.rgb * 0.05f;
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);

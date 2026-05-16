@@ -137,7 +137,7 @@ class RenderingSystem {
   };
 
   static constexpr UINT kParticleMaxCount = 16384;
-  static constexpr UINT kParticlePoolSrvIndex = kTextureSrvStart + 256;
+  static constexpr UINT kParticlePoolSrvIndex = kShadowMapSrvIndex + 1;
   static constexpr UINT kParticlePoolUavIndex = kParticlePoolSrvIndex + 1;
   static constexpr UINT kDeadListAUavIndex = kParticlePoolSrvIndex + 2;
   static constexpr UINT kDeadListBUavIndex = kParticlePoolSrvIndex + 3;
