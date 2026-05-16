@@ -1460,29 +1460,30 @@ void BoxApp::Update(const GameTimer& gt) {
 
   // Падающие point lights с приземлением на пол. занимают lights[0-3]
   const float deltaTime = gt.DeltaTime();
-  for (size_t i = 0; i < mFallingLights.size(); ++i) {
-    auto& fallingLight = mFallingLights[i];
-    if (fallingLight.Position.y > fallingLight.GroundY) {
-      fallingLight.Position.y = std::max(
-          fallingLight.GroundY,
-          fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
-    } else {
-      fallingLight.CooldownAfterLanding -= deltaTime;
-      if (fallingLight.CooldownAfterLanding <= 0.0f) {
-        ResetFallingLight(fallingLight);
-      }
-    }
-    mComposeConstants.Lights[i].PositionWorldAndRange =
-        DirectX::SimpleMath::Vector4(
-            fallingLight.Position.x, fallingLight.Position.y,
-            fallingLight.Position.z, fallingLight.Range);
-    mComposeConstants.Lights[i].DirectionAndType =
-        DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-    mComposeConstants.Lights[i].ColorAndIntensity =
-        DirectX::SimpleMath::Vector4(fallingLight.Color.x, fallingLight.Color.y,
-                                     fallingLight.Color.z,
-                                     fallingLight.Intensity);
-  }
+  // for (size_t i = 0; i < mFallingLights.size(); ++i) {
+  //   auto& fallingLight = mFallingLights[i];
+  //   if (fallingLight.Position.y > fallingLight.GroundY) {
+  //     fallingLight.Position.y = std::max(
+  //         fallingLight.GroundY,
+  //         fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
+  //   } else {
+  //     fallingLight.CooldownAfterLanding -= deltaTime;
+  //     if (fallingLight.CooldownAfterLanding <= 0.0f) {
+  //       ResetFallingLight(fallingLight);
+  //     }
+  //   }
+  //   mComposeConstants.Lights[i].PositionWorldAndRange =
+  //       DirectX::SimpleMath::Vector4(
+  //           fallingLight.Position.x, fallingLight.Position.y,
+  //           fallingLight.Position.z, fallingLight.Range);
+  //   mComposeConstants.Lights[i].DirectionAndType =
+  //       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  //   mComposeConstants.Lights[i].ColorAndIntensity =
+  //       DirectX::SimpleMath::Vector4(fallingLight.Color.x,
+  //       fallingLight.Color.y,
+  //                                    fallingLight.Color.z,
+  //                                    fallingLight.Intensity);
+  // }
 
   const size_t directionalLightIndex = 0;
   const size_t firstSpotLightIndex = directionalLightIndex + 1;
