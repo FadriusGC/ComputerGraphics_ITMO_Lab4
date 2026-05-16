@@ -36,16 +36,16 @@ cbuffer cbCompose : register(b0) {
 float3 ReconstructWorldPos(float2 uv, float depth, out float linearDepth) {
     float x = uv.x * 2.0f - 1.0f;
     float y = (1.0f - uv.y) * 2.0f - 1.0f;
+
     float4 ndcPos = float4(x, y, depth, 1.0f);
     float4 worldPos = mul(ndcPos, gInvViewProj);
-    
-    linearDepth = abs(1.0f / worldPos.w); // Изменено на более стабильный вариант
+
+    linearDepth = abs(1.0f / max(worldPos.w, 1e-6f));
     return worldPos.xyz / worldPos.w;
 }
 
 float CalcShadowFactor(float3 worldPos, float pixelDepth) {
     uint cascade = 0;
-    // Логика выбора каскада
     [unroll]
     for (uint i = 0; i < CASCADE_COUNT - 1; ++i) {
         if (pixelDepth > gCascadeSplits[i]) {
@@ -56,12 +56,25 @@ float CalcShadowFactor(float3 worldPos, float pixelDepth) {
 
     float4 shadowPosH = mul(float4(worldPos, 1.0f), gShadowTransforms[cascade]);
     shadowPosH.xyz /= shadowPosH.w;
+    if (shadowPosH.x < 0.0f || shadowPosH.x > 1.0f ||
+        shadowPosH.y < 0.0f || shadowPosH.y > 1.0f ||
+        shadowPosH.z < 0.0f || shadowPosH.z > 1.0f) {
+        return 1.0f;
+    }
 
-    //Добавлен BIAS (0.002f)
-    float bias = 0.002f;
-    
-    // Используем упрощенный семплинг для проверки
-    return gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowPosH.xy, cascade), shadowPosH.z - bias);
+    uint w, h, elements;
+    gShadowMap.GetDimensions(w, h, elements);
+    float dx = 1.0f / (float)w;
+    float2 offsets[9] = {
+        float2(-dx,-dx), float2(0,-dx), float2(dx,-dx),
+        float2(-dx,0), float2(0,0), float2(dx,0),
+        float2(-dx,dx), float2(0,dx), float2(dx,dx)
+    };
+    float lit = 0;
+    [unroll] for (int i=0;i<9;++i) {
+        lit += gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowPosH.xy + offsets[i], cascade), shadowPosH.z).r;
+    }
+    return lit / 9.0f;
 }
 
 float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 normal, float3 viewDir, float roughness, float shadowFactor) {
@@ -96,11 +109,15 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     float3 diffuse = radiance * NdotL * attenuation;
 
     float3 halfVec = normalize(L + viewDir);
-    float spec = pow(saturate(dot(normal, halfVec)), lerp(64.0f, 4.0f, saturate(roughness))) * attenuation;
-    float3 specular = radiance * spec * lerp(0.25f, 0.04f, saturate(roughness));
+    float specPower = lerp(64.0f, 4.0f, saturate(roughness));
+    float specStrength = lerp(0.25f, 0.04f, saturate(roughness));
+    float spec = pow(saturate(dot(normal, halfVec)), specPower) * attenuation;
+    float3 specular = radiance * spec * specStrength;
 
-    if (lightType == LIGHT_TYPE_DIRECTIONAL) {
-        diffuse *= shadowFactor;
+   if (lightType == LIGHT_TYPE_DIRECTIONAL) {
+        float3 shadowTint = float3(0.0f, 0.0f, 0.0f);
+        float3 shadowMod = lerp(shadowTint * 2.0f, float3(1.0f, 1.0f, 1.0f), shadowFactor);
+        diffuse *= shadowMod;
         specular *= shadowFactor;
     }
 
@@ -108,24 +125,23 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
 }
 
 float4 PS(PS_INPUT input) : SV_Target {
-    float4 normalSample = gNormal.Sample(gSampler, input.TexC);
-    float depth = gDepth.Sample(gSampler, input.TexC).r;
-    
-    if (depth >= 1.0f) discard; // Оптимизация пустого пространства
-
     float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
-    float3 normal = normalize(normalSample.xyz * 2.0f - 1.0f);
+    float4 normalSample = gNormal.Sample(gSampler, input.TexC);
+    float3 encodedNormal = normalSample.xyz;
+    float depth = gDepth.Sample(gSampler, input.TexC).r;
+
+    float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
     float roughness = saturate(normalSample.a);
-    
-    float pixelDepth;
+    float pixelDepth = 0.0f;
     float3 worldPos = ReconstructWorldPos(input.TexC, depth, pixelDepth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
-    
     float shadowFactor = CalcShadowFactor(worldPos, pixelDepth);
-    //if (shadowFactor < 1.0f) return float4(1.0, 0.0, 0.0, 1.0);
-    float3 color = albedo.rgb * 0.05f; // Ambient
+
+    float3 color = albedo.rgb * 0.05f;
+    if (shadowFactor < 1.0f) return float4(1.0, 0.0, 0.0, 1.0); //отладка, при залете в затененные области красный экран
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
 
+    [loop]
     for (uint i = 0; i < lightCount; ++i) {
         uint lightType = (uint)gLights[i].DirectionAndType.w;
         color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness, shadowFactor);
