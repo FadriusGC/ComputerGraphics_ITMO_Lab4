@@ -302,6 +302,8 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
 
   D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPso = pso;
   shadowPso.pRootSignature = mShadowRootSignature.Get();
+  shadowPso.InputLayout = {mInputLayout.data(),
+                           static_cast<UINT>(mInputLayout.size())};
   shadowPso.VS = {reinterpret_cast<BYTE*>(mShadowVS->GetBufferPointer()),
                   mShadowVS->GetBufferSize()};
   shadowPso.HS = {nullptr, 0};
@@ -600,17 +602,20 @@ void RenderingSystem::DrawSceneToShadowMaps(
     const ModelGeometry& modelGeometry,
     const std::vector<SubmeshInstance>& submeshInstances,
     const std::vector<UINT>& visibleSubmeshInstanceIndices, UINT cascadeIndex) {
-  cmdList->RSSetViewports(1, &mShadowMap.Viewport());
-  cmdList->RSSetScissorRects(1, &mShadowMap.ScissorRect());
+  const auto shadowViewport = mShadowMap.Viewport();
+  const auto shadowScissor = mShadowMap.ScissorRect();
+  cmdList->RSSetViewports(1, &shadowViewport);
+  cmdList->RSSetScissorRects(1, &shadowScissor);
   auto toWrite = CD3DX12_RESOURCE_BARRIER::Transition(
       mShadowMap.Resource(), D3D12_RESOURCE_STATE_GENERIC_READ,
       D3D12_RESOURCE_STATE_DEPTH_WRITE);
   cmdList->ResourceBarrier(1, &toWrite);
   cmdList->ClearDepthStencilView(mShadowMap.Dsv(cascadeIndex),
                                  D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-  cmdList->OMSetRenderTargets(0, nullptr, false, &mShadowMap.Dsv(cascadeIndex));
+  const auto shadowDsv = mShadowMap.Dsv(cascadeIndex);
+  cmdList->OMSetRenderTargets(0, nullptr, false, &shadowDsv);
   cmdList->SetPipelineState(mShadowPSO.Get());
-  cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
+  cmdList->SetGraphicsRootSignature(mShadowRootSignature.Get());
   auto passAddress =
       mShadowPassCB->Resource()->GetGPUVirtualAddress() + cascadeIndex * 256;
   cmdList->SetGraphicsRootConstantBufferView(1, passAddress);
@@ -678,8 +683,13 @@ void RenderingSystem::Render(
                           visibleSubmeshInstanceIndices, cascade);
   }
 
+  // Shadow pass overrides viewport/scissor to shadow map resolution.
+  // Restore main camera viewport/scissor before geometry/compose passes.
+  cmdList->RSSetViewports(1, &viewport);
+  cmdList->RSSetScissorRects(1, &scissorRect);
+
   cmdList->SetPipelineState(mGeometryPSO.Get());
-  cmdList->SetGraphicsRootSignature(mShadowRootSignature.Get());
+  cmdList->SetGraphicsRootSignature(mGeometryRootSignature.Get());
 
   mGBuffer.BeginGeometryPass(cmdList, dsvHandle);
 

@@ -50,9 +50,9 @@ float CalcShadowFactor(float3 worldPos, float viewDepth) {
     if (shadowPosH.x < 0 || shadowPosH.x > 1 || shadowPosH.y < 0 || shadowPosH.y > 1 || shadowPosH.z < 0 || shadowPosH.z > 1)
         return 1.0f;
 
-    uint w,h,l;
-    gShadowMap.GetDimensions(0,w,h,l);
-    float dx = 1.0f / w;
+    uint w, h, elements;
+    gShadowMap.GetDimensions(w, h, elements);
+    float dx = 1.0f / (float)w;
     float2 offsets[9] = {
         float2(-dx,-dx), float2(0,-dx), float2(dx,-dx),
         float2(-dx,0), float2(0,0), float2(dx,0),
