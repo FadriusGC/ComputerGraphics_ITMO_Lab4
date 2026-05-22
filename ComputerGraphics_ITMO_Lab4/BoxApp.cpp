@@ -73,7 +73,8 @@ void ComputeCascadeShadowTransform(
     const DirectX::SimpleMath::Matrix& proj,
     const DirectX::SimpleMath::Vector3& lightDir, float splitNear,
     float splitFar, float mapResolution,
-    DirectX::SimpleMath::Matrix& outShadowTransform) {
+    DirectX::SimpleMath::Matrix& outShadowTransform,
+    DirectX::SimpleMath::Matrix& outLightViewProj) {
   const auto invViewProj = (view * proj).Invert();
 
   std::array<DirectX::SimpleMath::Vector3, 8> frustumCorners = {
@@ -130,7 +131,9 @@ void ComputeCascadeShadowTransform(
   const DirectX::SimpleMath::Matrix tex(0.5f, 0.0f, 0.0f, 0.0f, 0.0f, -0.5f,
                                         0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
                                         0.5f, 0.5f, 0.0f, 1.0f);
-  outShadowTransform = (snappedLightView * lightProj * tex).Transpose();
+  const auto lightViewProj = snappedLightView * lightProj;
+  outLightViewProj = lightViewProj.Transpose();
+  outShadowTransform = (lightViewProj * tex).Transpose();
 }
 }  // namespace
 
@@ -1454,7 +1457,8 @@ void BoxApp::Update(const GameTimer& gt) {
   for (int i = 0; i < ComposeConstants::kCascadeCount; ++i) {
     ComputeCascadeShadowTransform(mView, mProj, lightDir, previousSplit,
                                   cascadeRanges[i], 2048.0f,
-                                  mComposeConstants.ShadowTransforms[i]);
+                                  mComposeConstants.ShadowTransforms[i],
+                                  mComposeConstants.LightViewProj[i]);
     previousSplit = cascadeRanges[i];
   }
 

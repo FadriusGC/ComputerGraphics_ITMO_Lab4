@@ -45,7 +45,7 @@ float3 ReconstructWorldPos(float2 uv, float depth, out float linearDepth) {
     return world;
 }
 
-float CalcShadowFactor(float3 worldPos, float pixelDepth) {
+float CalcShadowFactor(float3 worldPos, float3 normalW, float3 lightDirW, float pixelDepth) {
     uint cascade = 0;
     [unroll]
     for (uint i = 0; i < CASCADE_COUNT - 1; ++i) {
@@ -65,15 +65,20 @@ float CalcShadowFactor(float3 worldPos, float pixelDepth) {
 
     uint w, h, elements;
     gShadowMap.GetDimensions(w, h, elements);
-    float dx = 1.0f / (float)w;
+    float2 texelSize = 1.0f / float2((float)w, (float)h);
     float2 offsets[9] = {
-        float2(-dx,-dx), float2(0,-dx), float2(dx,-dx),
-        float2(-dx,0), float2(0,0), float2(dx,0),
-        float2(-dx,dx), float2(0,dx), float2(dx,dx)
+        float2(-1.0f,-1.0f), float2(0.0f,-1.0f), float2(1.0f,-1.0f),
+        float2(-1.0f, 0.0f), float2(0.0f, 0.0f), float2(1.0f, 0.0f),
+        float2(-1.0f, 1.0f), float2(0.0f, 1.0f), float2(1.0f, 1.0f)
     };
+
+    float ndotl = saturate(dot(normalW, lightDirW));
+    float bias = max(0.00035f * (1.0f - ndotl), 0.00008f);
+    float compareDepth = shadowPosH.z - bias;
+
     float lit = 0;
     [unroll] for (int i=0;i<9;++i) {
-        lit += gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowPosH.xy + offsets[i], cascade), shadowPosH.z).r;
+        lit += gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowPosH.xy + offsets[i] * texelSize, cascade), compareDepth).r;
     }
     return lit / 9.0f;
 }
@@ -130,13 +135,18 @@ float4 PS(PS_INPUT input) : SV_Target {
     float4 normalSample = gNormal.Sample(gSampler, input.TexC);
     float3 encodedNormal = normalSample.xyz;
     float depth = gDepth.Sample(gSampler, input.TexC).r;
+    if (depth >= 1.0f) {
+        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
 
     float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
     float roughness = saturate(normalSample.a);
     float pixelDepth = 0.0f;
     float3 worldPos = ReconstructWorldPos(input.TexC, depth, pixelDepth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
-    float shadowFactor = CalcShadowFactor(worldPos, pixelDepth);
+    float3 dirLightDir = normalize(-gLights[0].DirectionAndType.xyz);
+    float shadowFactor = CalcShadowFactor(worldPos, normal, dirLightDir, pixelDepth);
 
     float3 color = albedo.rgb * 0.05f;
     //if (shadowFactor < 1.0f) return float4(1.0, 0.0, 0.0, 1.0); //отладка, при залете в затененные области красный экран

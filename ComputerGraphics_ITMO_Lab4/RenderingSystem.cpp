@@ -672,17 +672,12 @@ void RenderingSystem::Render(
 
   SimulateParticles(cmdList, deltaTime, cameraPosition);
 
-  const DirectX::SimpleMath::Matrix tex(0.5f, 0.0f, 0.0f, 0.0f, 0.0f, -0.5f,
-                                        0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
-                                        0.5f, 0.5f, 0.0f, 1.0f);
-  const auto invTexT = tex.Transpose().Invert();
   for (UINT cascade = 0; cascade < ShadowMap::kCascadeCount; ++cascade) {
-    // Compose pass stores world->shadow texture matrix: (LightViewProj *
-    // Tex)^T.
-    // Shadow depth pass needs clip-space light matrix: (LightViewProj)^T.
-    const auto lightViewProj =
-        invTexT * composeConstants.ShadowTransforms[cascade];
-    mShadowPassCB->CopyData(static_cast<int>(cascade), lightViewProj);
+    // Use explicit per-cascade light VP prepared on CPU.
+    // This avoids reconstructing VP from shadow texture transform and
+    // prevents matrix-space mismatch between shadow render and compose stages.
+    mShadowPassCB->CopyData(static_cast<int>(cascade),
+                            composeConstants.LightViewProj[cascade]);
   }
 
   for (UINT cascade = 0; cascade < ShadowMap::kCascadeCount; ++cascade) {

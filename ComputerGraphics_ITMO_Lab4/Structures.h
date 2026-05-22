@@ -92,5 +92,6 @@ struct ComposeConstants {
   DirectX::SimpleMath::Vector4 LightCount;
   DirectX::SimpleMath::Vector4 CascadeSplits;
   DirectX::SimpleMath::Matrix ShadowTransforms[kCascadeCount];
+  DirectX::SimpleMath::Matrix LightViewProj[kCascadeCount];
   GpuLight Lights[kMaxLights];
 };
