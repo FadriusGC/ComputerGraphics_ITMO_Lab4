@@ -1496,7 +1496,7 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   mComposeConstants.Lights[directionalLightIndex].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
+      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 5.1f, 1.0f);
   mComposeConstants.Lights[directionalLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 
