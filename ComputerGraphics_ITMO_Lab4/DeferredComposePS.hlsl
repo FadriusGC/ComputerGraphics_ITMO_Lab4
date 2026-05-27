@@ -172,11 +172,49 @@ float3 ApplyMonitorEffect(float2 uv, float3 sceneColor)
     return saturate(result);
 }
 
+//тут начинается фишай
+static const float PI = 3.14159265f;
+
+float FishEyeCorrection(float fov, float2 uv) {
+    float z = 1.0f / tan(fov * 0.5f);
+    float xyLen = length(uv);
+    if (xyLen < 1e-5f) {
+        return 1.0f;
+    }
+
+    float b = atan2(xyLen, z);
+    float k = 2.0f * b / (xyLen * fov);
+    return k;
+}
+
+float2 DistortFishEyeUV(float2 uv01) {
+    float2 uv = uv01 * 2.0f - 1.0f;
+    float aspect = gScreenSize.x / gScreenSize.y;
+    uv.y /= aspect;
+
+    const float fov = 120.0f * PI / 180.0f;
+    float k = FishEyeCorrection(fov, uv);
+
+    float2 newUv = uv / max(k, 1e-5f);
+    newUv.y *= aspect;
+    return (newUv + 1.0f) * 0.5f;
+}
+
+
 float4 PS(PS_INPUT input) : SV_Target {
-    float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
-    float4 normalSample = gNormal.Sample(gSampler, input.TexC);
+    float2 sampleUv = input.TexC;
+    if (gMonitorEffectParams.z > 0.5f) {
+        sampleUv = DistortFishEyeUV(input.TexC);
+    }
+
+    if (sampleUv.x < 0.0f || sampleUv.x > 1.0f || sampleUv.y < 0.0f || sampleUv.y > 1.0f) {
+        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    float4 albedo = gAlbedo.Sample(gSampler, sampleUv);
+    float4 normalSample = gNormal.Sample(gSampler, sampleUv);
     float3 encodedNormal = normalSample.xyz;
-    float depth = gDepth.Sample(gSampler, input.TexC).r;
+    float depth = gDepth.Sample(gSampler, sampleUv).r;
     if (depth >= 1.0f) {
         return float4(0.0f, 0.0f, 0.0f, 1.0f);
     }
@@ -185,7 +223,7 @@ float4 PS(PS_INPUT input) : SV_Target {
     float3 normal = normalize(encodedNormal * 2.0f - 1.0f);
     float roughness = saturate(normalSample.a);
     float pixelDepth = 0.0f;
-    float3 worldPos = ReconstructWorldPos(input.TexC, depth, pixelDepth);
+    float3 worldPos = ReconstructWorldPos(sampleUv, depth, pixelDepth);
     float3 viewDir = normalize(gCameraPosition.xyz - worldPos);
     float3 dirLightDir = normalize(-gLights[0].DirectionAndType.xyz);
     float shadowFactor = CalcShadowFactor(worldPos, normal, dirLightDir, pixelDepth);

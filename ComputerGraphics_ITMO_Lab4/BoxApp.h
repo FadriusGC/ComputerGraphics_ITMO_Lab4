@@ -192,6 +192,8 @@ class BoxApp {
   bool mFrustumCullingToggleKeyWasDown = false;
   bool mMonitorEffectEnabled = true;
   bool mMonitorEffectToggleKeyWasDown = false;
+  bool mFishEyeEnabled = false;
+  bool mFishEyeToggleKeyWasDown = false;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;
