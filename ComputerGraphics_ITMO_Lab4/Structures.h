@@ -94,6 +94,9 @@ struct ComposeConstants {
   // x: exposure, y: gamma, z: enableHdr, w: enableGammaCorrection
   DirectX::SimpleMath::Vector4 PostProcessParams =
       DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
+  // x: enableMonitorEffect, y: totalTime, z/w: reserved
+  DirectX::SimpleMath::Vector4 MonitorEffectParams =
+      DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 0.0f);
   DirectX::SimpleMath::Matrix ShadowTransforms[kCascadeCount];
   DirectX::SimpleMath::Matrix LightViewProj[kCascadeCount];
   GpuLight Lights[kMaxLights];

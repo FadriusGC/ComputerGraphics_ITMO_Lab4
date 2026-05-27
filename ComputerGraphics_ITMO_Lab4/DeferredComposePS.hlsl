@@ -30,6 +30,7 @@ cbuffer cbCompose : register(b0) {
     float4 gLightCount;
     float4 gCascadeSplits;
     float4 gPostProcessParams; // x: exposure, y: gamma, z: enableHdr, w: enableGammaCorrection
+    float4 gMonitorEffectParams; // x: enableMonitorEffect, y: totalTime
     float4x4 gShadowTransforms[CASCADE_COUNT];
     GpuLight gLights[MAX_LIGHTS];
 };
@@ -131,6 +132,46 @@ float3 EvaluateLight(uint lightType, GpuLight light, float3 worldPos, float3 nor
     return diffuse + specular;
 }
 
+
+float Hash2(float2 p) //generit psevdosluchaemiy shum
+{
+    float3 p3 = frac(float3(p.x, p.y, p.x) * 0.2831f);
+    p3 += dot(p3, p3.yzx + 19.19f);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+//monitor post process ezhzhe
+float3 ApplyMonitorEffect(float2 uv, float3 sceneColor)
+{
+    float2 resolution = gScreenSize.xy;
+    float t = gMonitorEffectParams.y;
+
+    // Вектор от центра экрана
+    float2 V = 1.0f - 2.0f * uv;
+
+    // Базовый цвет типо элт монитора
+    float3 result = float3(0.0f, 0.1f, 0.2f);
+
+    // Добавляем цвета сцены 
+    result += sceneColor;
+
+    // Зернистость
+    //t -time, V.xy - вектор от центра экрана, 1462.439f и 297.185f просто сиды. 0.06f - плоский множитель шума, по сути процент зашумления
+    result += 0.06f * Hash2(
+        float2(t + V.x * 1462.439f, t + V.y * 297.185f)
+    );
+
+    // Виньетка
+    result *= 1.25f * (1.0f - smoothstep(0.1f, 1.8f, length(V * V)));
+
+    // Горизонтальные линии
+    float scanline = 0.90f + 0.10f * sin(uv.y * resolution.y * 0.5f);
+
+    result *= scanline;
+
+    return saturate(result);
+}
+
 float4 PS(PS_INPUT input) : SV_Target {
     float4 albedo = gAlbedo.Sample(gSampler, input.TexC);
     float4 normalSample = gNormal.Sample(gSampler, input.TexC);
@@ -172,6 +213,10 @@ float4 PS(PS_INPUT input) : SV_Target {
 
     if (enableGammaCorrection) {
         finalColor = pow(saturate(finalColor), 1.0f / gamma);
+    }
+
+    if (gMonitorEffectParams.x > 0.5f) {
+        finalColor = ApplyMonitorEffect(input.TexC, finalColor);
     }
 
     return float4(finalColor, albedo.a);

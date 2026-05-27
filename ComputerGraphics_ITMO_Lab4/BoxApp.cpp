@@ -1363,6 +1363,12 @@ void BoxApp::Update(const GameTimer& gt) {
     mFrustumCullingEnabled = !mFrustumCullingEnabled;
   }
   mFrustumCullingToggleKeyWasDown = isToggleKeyDown;
+
+  const bool isMonitorToggleKeyDown = (GetAsyncKeyState('1') & 0x8000) != 0;
+  if (isMonitorToggleKeyDown && !mMonitorEffectToggleKeyWasDown) {
+    mMonitorEffectEnabled = !mMonitorEffectEnabled;
+  }
+  mMonitorEffectToggleKeyWasDown = isMonitorToggleKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
@@ -1451,6 +1457,9 @@ void BoxApp::Update(const GameTimer& gt) {
 
   mComposeConstants.PostProcessParams =
       DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
+
+  mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
+      mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime, 0.0f, 0.0f);
 
   const DirectX::SimpleMath::Vector3 lightDir =
       DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
