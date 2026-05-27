@@ -34,8 +34,9 @@ PS_OUTPUT PS(PS_INPUT input) {
 
     float2 transformedTexC = mul(float4(input.TexC, 0.0f, 1.0f), gTexTransform).xy;
     float4 texColor = gDiffuseMap.Sample(gSampler, transformedTexC);
+    float3 baseColorLinear = pow(saturate(texColor.rgb), 2.2f);
 
-    output.Albedo = float4(gDiffuseAlbedo.rgb * texColor.rgb, gDiffuseAlbedo.a * texColor.a);
+    output.Albedo = float4(gDiffuseAlbedo.rgb * baseColorLinear, gDiffuseAlbedo.a * texColor.a);
 
     float3 worldNormal = normalize(input.Normal);
     if (gHasNormalMap > 0.5f) {

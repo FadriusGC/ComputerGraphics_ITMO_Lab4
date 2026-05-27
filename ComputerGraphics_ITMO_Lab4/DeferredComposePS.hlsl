@@ -29,6 +29,7 @@ cbuffer cbCompose : register(b0) {
     float4 gScreenSize;
     float4 gLightCount;
     float4 gCascadeSplits;
+    float4 gPostProcessParams; // x: exposure, y: gamma, z: enableHdr, w: enableGammaCorrection
     float4x4 gShadowTransforms[CASCADE_COUNT];
     GpuLight gLights[MAX_LIGHTS];
 };
@@ -158,5 +159,20 @@ float4 PS(PS_INPUT input) : SV_Target {
         color += albedo.rgb * EvaluateLight(lightType, gLights[i], worldPos, normal, viewDir, roughness, shadowFactor);
     }
 
-    return float4(saturate(color), albedo.a);
+    float3 finalColor = max(color, 0.0f);
+
+    float exposure = max(gPostProcessParams.x, 0.0001f);
+    float gamma = max(gPostProcessParams.y, 0.0001f);
+    bool enableHdr = (gPostProcessParams.z > 0.5f);
+    bool enableGammaCorrection = (gPostProcessParams.w > 0.5f);
+
+    if (enableHdr) {
+        finalColor = 1.0f - exp(-finalColor * exposure);
+    }
+
+    if (enableGammaCorrection) {
+        finalColor = pow(saturate(finalColor), 1.0f / gamma);
+    }
+
+    return float4(finalColor, albedo.a);
 }

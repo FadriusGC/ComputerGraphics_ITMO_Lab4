@@ -1449,6 +1449,9 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.CascadeSplits =
       DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
 
+  mComposeConstants.PostProcessParams =
+      DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
+
   const DirectX::SimpleMath::Vector3 lightDir =
       DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
   const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
