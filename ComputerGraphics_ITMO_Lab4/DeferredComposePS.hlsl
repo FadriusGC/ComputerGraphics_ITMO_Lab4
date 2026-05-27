@@ -200,6 +200,39 @@ float2 DistortFishEyeUV(float2 uv01) {
     return (newUv + 1.0f) * 0.5f;
 }
 
+//дизеринг начинается тут
+float Bayer4x4(int2 pixelPos)
+{
+    static const float bayer[16] =
+    {
+         0.0f,  8.0f,  2.0f, 10.0f,
+        12.0f,  4.0f, 14.0f,  6.0f,
+         3.0f, 11.0f,  1.0f,  9.0f,
+        15.0f,  7.0f, 13.0f,  5.0f
+    };
+
+    int x = pixelPos.x & 3;
+    int y = pixelPos.y & 3;
+
+    return bayer[y * 4 + x] / 16.0f;
+}
+float3 ApplyDithering(float3 color, float2 uv)
+{
+    float2 screenPos = uv * gScreenSize.xy;
+
+    float threshold = Bayer4x4(int2(screenPos));
+
+    // сила дизеринга
+    float ditherStrength = 50.0f / 255.0f;
+
+    color += (threshold - 0.5f) * ditherStrength;
+    //палитра цветов
+    float colorLevels = 8.0f;
+
+    color = floor(color * colorLevels) / colorLevels;
+
+    return saturate(color);
+}
 
 float4 PS(PS_INPUT input) : SV_Target {
     float2 sampleUv = input.TexC;
@@ -255,6 +288,10 @@ float4 PS(PS_INPUT input) : SV_Target {
 
     if (gMonitorEffectParams.x > 0.5f) {
         finalColor = ApplyMonitorEffect(input.TexC, finalColor);
+    }
+
+    if (gMonitorEffectParams.w > 0.5f) {
+        finalColor = ApplyDithering(finalColor, input.TexC);
     }
 
     return float4(finalColor, albedo.a);

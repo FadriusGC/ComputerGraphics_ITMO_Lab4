@@ -1375,6 +1375,14 @@ void BoxApp::Update(const GameTimer& gt) {
     mFishEyeEnabled = !mFishEyeEnabled;
   }
   mFishEyeToggleKeyWasDown = isFishEyeToggleKeyDown;
+
+  const bool ditheringKeyDown = (GetAsyncKeyState('3') & 0x8000) != 0;
+
+  if (ditheringKeyDown && !mDitheringToggleKeyWasDown) {
+    mDitheringEnabled = !mDitheringEnabled;
+  }
+
+  mDitheringToggleKeyWasDown = ditheringKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
@@ -1466,7 +1474,7 @@ void BoxApp::Update(const GameTimer& gt) {
 
   mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
-      mFishEyeEnabled ? 1.0f : 0.0f, 0.0f);
+      mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
 
   const DirectX::SimpleMath::Vector3 lightDir =
       DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
