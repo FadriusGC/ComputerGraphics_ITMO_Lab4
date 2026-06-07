@@ -67,6 +67,83 @@ DirectX::SimpleMath::Vector3 GetFrustumCornerWorld(
   world /= world.w;
   return DirectX::SimpleMath::Vector3(world.x, world.y, world.z);
 }
+void AppendAlphaTestFence(ModelGeometry& geometry,
+                          std::vector<SceneObject>& sceneObjects) {
+  constexpr float kFenceWidth = 360.0f;
+  constexpr float kFenceHeight = 140.0f;
+  constexpr float kFenceTileU = 3.0f;
+
+  const uint32_t vertexOffset = static_cast<uint32_t>(geometry.Vertices.size());
+  const UINT indexStart = static_cast<UINT>(geometry.Indices.size());
+  const UINT submeshStart = static_cast<UINT>(geometry.Submeshes.size());
+  const UINT materialIndex = static_cast<UINT>(geometry.Materials.size());
+
+  Material fenceMaterial;
+  fenceMaterial.Name = "AlphaTestFence";
+  fenceMaterial.DiffuseTexture = "fence_texture.dds";
+  fenceMaterial.Data.DiffuseAlbedo = {1.0f, 1.0f, 1.0f, 1.0f};
+  fenceMaterial.Data.FresnelR0 = {0.02f, 0.02f, 0.02f};
+  fenceMaterial.Data.Roughness = 0.45f;
+  fenceMaterial.Data.HasNormalMap = 0.0f;
+  fenceMaterial.Data.HasDisplacementMap = 0.0f;
+  fenceMaterial.Data.HasRoughnessMap = 0.0f;
+  fenceMaterial.Data.DisplacementScale = 0.0f;
+  geometry.Materials.push_back(fenceMaterial);
+
+  auto makeVertex = [](float x, float y, float z, float u, float v) {
+    Vertex vertex;
+    vertex.Pos = {x, y, z};
+    vertex.Normal = {0.0f, 0.0f, -1.0f};
+    vertex.TexC = {u, v};
+    vertex.Color = {1.0f, 1.0f, 1.0f, 1.0f};
+    vertex.Tangent = {1.0f, 0.0f, 0.0f};
+    vertex.Bitangent = {0.0f, 1.0f, 0.0f};
+    return vertex;
+  };
+
+  geometry.Vertices.push_back(
+      makeVertex(-kFenceWidth * 0.5f, 0.0f, 0.0f, 0.0f, 1.0f));
+  geometry.Vertices.push_back(
+      makeVertex(-kFenceWidth * 0.5f, kFenceHeight, 0.0f, 0.0f, 0.0f));
+  geometry.Vertices.push_back(
+      makeVertex(kFenceWidth * 0.5f, kFenceHeight, 0.0f, kFenceTileU, 0.0f));
+  geometry.Vertices.push_back(
+      makeVertex(kFenceWidth * 0.5f, 0.0f, 0.0f, kFenceTileU, 1.0f));
+
+  geometry.Indices.insert(
+      geometry.Indices.end(),
+      {vertexOffset + 0, vertexOffset + 1, vertexOffset + 2, vertexOffset + 0,
+       vertexOffset + 2, vertexOffset + 3});
+
+  Submesh fenceSubmesh;
+  fenceSubmesh.MaterialIndex = materialIndex;
+  fenceSubmesh.IndexCount = 6;
+  fenceSubmesh.StartIndexLocation = indexStart;
+  fenceSubmesh.LodIndexCount = {6, 6, 6};
+  fenceSubmesh.LodStartIndexLocation = {indexStart, indexStart, indexStart};
+  DirectX::BoundingBox::CreateFromPoints(
+      fenceSubmesh.Bounds,
+      DirectX::SimpleMath::Vector3(-kFenceWidth * 0.5f, 0.0f, -0.05f),
+      DirectX::SimpleMath::Vector3(kFenceWidth * 0.5f, kFenceHeight, 0.05f));
+  geometry.Submeshes.push_back(fenceSubmesh);
+
+  SceneObject fenceObject;
+  fenceObject.SubmeshStart = submeshStart;
+  fenceObject.SubmeshCount = 1;
+  fenceObject.World =
+      DirectX::SimpleMath::Matrix::CreateRotationY(
+          DirectX::XMConvertToRadians(90.0f)) *
+      DirectX::SimpleMath::Matrix::CreateTranslation(120.0f, 0.0f, 0.0f);
+  fenceObject.LocalBounds = fenceSubmesh.Bounds;
+  fenceObject.WorldBounds =
+      TransformBoundingBox(fenceObject.LocalBounds, fenceObject.World);
+  fenceObject.TessellationParams =
+      DirectX::SimpleMath::Vector4(1000.0f, 1001.0f, 1.0f, 1.0f);
+  fenceObject.LodDistances =
+      DirectX::SimpleMath::Vector4(1000.0f, 1001.0f, 0.0f, 0.0f);
+  fenceObject.WaveParams = DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  sceneObjects.push_back(fenceObject);
+}
 
 void ComputeCascadeShadowTransform(
     const DirectX::SimpleMath::Matrix& view,
@@ -600,6 +677,8 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
   }
+
+  AppendAlphaTestFence(mModelGeometry, mSceneObjects);
 
   for (auto& object : mSceneObjects) {
     bool hasBounds = false;
@@ -1487,7 +1566,7 @@ void BoxApp::Update(const GameTimer& gt) {
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
       mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
 
-  DirectX::SimpleMath::Vector3 lightDir(-0.35f, -1.0f, 0.1f);
+  DirectX::SimpleMath::Vector3 lightDir(-0.55f, -0.75f, -0.35f);
   lightDir.Normalize();
   const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
                                                                 600.0f};
