@@ -109,9 +109,20 @@ void ComputeCascadeShadowTransform(
   }
   radius = std::ceil(radius * 16.0f) / 16.0f;
 
-  const auto lightPos = center - lightDir * (radius * 2.0f);
-  const auto lightView = DirectX::SimpleMath::Matrix::CreateLookAt(
-      lightPos, center, DirectX::SimpleMath::Vector3::Up);
+  auto normalizedLightDir = lightDir;
+  if (normalizedLightDir.LengthSquared() < 1e-6f) {
+    normalizedLightDir = DirectX::SimpleMath::Vector3(0.0f, -1.0f, 0.0f);
+  } else {
+    normalizedLightDir.Normalize();
+  }
+  const DirectX::SimpleMath::Vector3 up =
+      std::abs(normalizedLightDir.Dot(DirectX::SimpleMath::Vector3::Up)) > 0.98f
+          ? DirectX::SimpleMath::Vector3(0.0f, 0.0f, 1.0f)
+          : DirectX::SimpleMath::Vector3::Up;
+
+  const auto lightPos = center - normalizedLightDir * (radius * 2.0f);
+  const auto lightView =
+      DirectX::SimpleMath::Matrix::CreateLookAt(lightPos, center, up);
 
   DirectX::SimpleMath::Vector3 centerLS =
       DirectX::SimpleMath::Vector3::Transform(center, lightView);
@@ -121,9 +132,10 @@ void ComputeCascadeShadowTransform(
 
   const auto snappedCenterWS =
       DirectX::SimpleMath::Vector3::Transform(centerLS, lightView.Invert());
-  const auto snappedLightPos = snappedCenterWS - lightDir * (radius * 2.0f);
+  const auto snappedLightPos =
+      snappedCenterWS - normalizedLightDir * (radius * 2.0f);
   const auto snappedLightView = DirectX::SimpleMath::Matrix::CreateLookAt(
-      snappedLightPos, snappedCenterWS, DirectX::SimpleMath::Vector3::Up);
+      snappedLightPos, snappedCenterWS, up);
 
   const auto lightProj =
       DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
@@ -1463,8 +1475,7 @@ void BoxApp::Update(const GameTimer& gt) {
       kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
       "слишком много источников для ComposeConstants::Lights array");
   mComposeConstants.LightCount = DirectX::SimpleMath::Vector4(
-      static_cast<float>(mFallingLights.size() + kStaticLightCount), 0.0f, 0.0f,
-      0.0f);
+      static_cast<float>(kStaticLightCount), 0.0f, 0.0f, 0.0f);
 
   mComposeConstants.CascadeSplits =
       DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
@@ -1476,8 +1487,8 @@ void BoxApp::Update(const GameTimer& gt) {
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
       mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
 
-  const DirectX::SimpleMath::Vector3 lightDir =
-      DirectX::SimpleMath::Vector3(-0.35f, -1.0f, 0.1f);
+  DirectX::SimpleMath::Vector3 lightDir(-0.35f, -1.0f, 0.1f);
+  lightDir.Normalize();
   const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
                                                                 600.0f};
   float previousSplit = 0.1f;
@@ -1523,7 +1534,7 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   mComposeConstants.Lights[directionalLightIndex].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 5.1f, 1.0f);
+      DirectX::SimpleMath::Vector4(lightDir.x, lightDir.y, lightDir.z, 1.0f);
   mComposeConstants.Lights[directionalLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 

@@ -32,6 +32,10 @@ cbuffer cbCompose : register(b0) {
     float4 gPostProcessParams; // x: exposure, y: gamma, z: enableHdr, w: enableGammaCorrection
     float4 gMonitorEffectParams; // x: enableMonitorEffect, y: totalTime
     float4x4 gShadowTransforms[CASCADE_COUNT];
+     // Stored in the C++ ComposeConstants between shadow texture transforms and lights.
+    // The compose shader does not sample it directly, but it must be declared here
+    // to keep the HLSL constant-buffer layout aligned with the CPU structure.
+    float4x4 gLightViewProj[CASCADE_COUNT];
     GpuLight gLights[MAX_LIGHTS];
 };
 

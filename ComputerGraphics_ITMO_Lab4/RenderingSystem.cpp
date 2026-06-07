@@ -59,6 +59,10 @@ void RenderingSystem::BuildShaders() {
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/ShadowVS.hlsl",
       "VS", "vs_5_0");
+  mShadowPS = ShaderHelper::CompileShader(
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/ShadowVS.hlsl",
+      "PS", "ps_5_0");
   mParticlesEmitCS = ShaderHelper::CompileShader(
       L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
       L"ComputerGraphics_ITMO_Lab4/ParticleEmitCS.hlsl",
@@ -173,14 +177,24 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildShadowRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[2];
+  CD3DX12_ROOT_PARAMETER params[5];
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
   params[0].InitAsDescriptorTable(1, &cbvTable0);
   params[1].InitAsConstantBufferView(1);
 
+  CD3DX12_DESCRIPTOR_RANGE diffuseSrvTable;
+  diffuseSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+  params[2].InitAsDescriptorTable(1, &diffuseSrvTable);
+
+  CD3DX12_DESCRIPTOR_RANGE samplerTable;
+  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0);
+  params[3].InitAsDescriptorTable(1, &samplerTable);
+
+  params[4].InitAsConstantBufferView(2);
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      2, params, 0, nullptr,
+      5, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
   ComPtr<ID3DBlob> serialized;
   ComPtr<ID3DBlob> error;
@@ -308,7 +322,8 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
                   mShadowVS->GetBufferSize()};
   shadowPso.HS = {nullptr, 0};
   shadowPso.DS = {nullptr, 0};
-  shadowPso.PS = {nullptr, 0};
+  shadowPso.PS = {reinterpret_cast<BYTE*>(mShadowPS->GetBufferPointer()),
+                  mShadowPS->GetBufferSize()};
   shadowPso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   shadowPso.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
   shadowPso.NumRenderTargets = 0;
@@ -601,7 +616,8 @@ void RenderingSystem::DrawSceneToShadowMaps(
     const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
     const ModelGeometry& modelGeometry,
     const std::vector<SubmeshInstance>& submeshInstances,
-    const std::vector<UINT>& visibleSubmeshInstanceIndices, UINT cascadeIndex) {
+    UploadBuffer<MaterialConstants>* materialCB,
+    D3D12_GPU_DESCRIPTOR_HANDLE samplerGpuStart, UINT cascadeIndex) {
   const auto shadowViewport = mShadowMap.Viewport();
   const auto shadowScissor = mShadowMap.ScissorRect();
   cmdList->RSSetViewports(1, &shadowViewport);
@@ -619,17 +635,50 @@ void RenderingSystem::DrawSceneToShadowMaps(
   auto passAddress =
       mShadowPassCB->Resource()->GetGPUVirtualAddress() + cascadeIndex * 256;
   cmdList->SetGraphicsRootConstantBufferView(1, passAddress);
+  cmdList->SetGraphicsRootDescriptorTable(3, samplerGpuStart);
+
+  const UINT cbMaterialSize = (sizeof(MaterialConstants) + 255) & ~255;
+  if (!modelGeometry.Materials.empty()) {
+    const auto& defaultMat = modelGeometry.Materials[0];
+    if (defaultMat.DiffuseTextureIndex >= 0) {
+      CD3DX12_GPU_DESCRIPTOR_HANDLE defaultDiffuseHandle(
+          mCbvSrvHeapGpuStart,
+          static_cast<INT>(kTextureSrvStart + defaultMat.DiffuseTextureIndex),
+          mCbvSrvDescriptorSize);
+      cmdList->SetGraphicsRootDescriptorTable(2, defaultDiffuseHandle);
+    }
+    D3D12_GPU_VIRTUAL_ADDRESS defaultMatAddress =
+        materialCB->Resource()->GetGPUVirtualAddress() +
+        static_cast<UINT64>(defaultMat.MatCBIndex) * cbMaterialSize;
+    cmdList->SetGraphicsRootConstantBufferView(4, defaultMatAddress);
+  }
+
   cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
   cmdList->IASetIndexBuffer(&indexBufferView);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
-    if (visibleInstanceIndex >= submeshInstances.size()) continue;
-    const auto& si = submeshInstances[visibleInstanceIndex];
+  for (const auto& si : submeshInstances) {
+    if (si.SubmeshIndex >= modelGeometry.Submeshes.size()) continue;
     CD3DX12_GPU_DESCRIPTOR_HANDLE objectCbHandle(
         mCbvSrvHeapGpuStart, static_cast<INT>(kObjectCbvStart + si.ObjectIndex),
         mCbvSrvDescriptorSize);
     cmdList->SetGraphicsRootDescriptorTable(0, objectCbHandle);
     const auto& submesh = modelGeometry.Submeshes[si.SubmeshIndex];
+
+    if (submesh.MaterialIndex < modelGeometry.Materials.size()) {
+      const auto& mat = modelGeometry.Materials[submesh.MaterialIndex];
+      if (mat.DiffuseTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE diffuseHandle(
+            mCbvSrvHeapGpuStart,
+            static_cast<INT>(kTextureSrvStart + mat.DiffuseTextureIndex),
+            mCbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(2, diffuseHandle);
+      }
+      D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
+          materialCB->Resource()->GetGPUVirtualAddress() +
+          static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
+      cmdList->SetGraphicsRootConstantBufferView(4, matCBAddress);
+    }
+
     cmdList->DrawIndexedInstanced(submesh.IndexCount, 1,
                                   submesh.StartIndexLocation, 0, 0);
   }
@@ -682,8 +731,9 @@ void RenderingSystem::Render(
 
   for (UINT cascade = 0; cascade < ShadowMap::kCascadeCount; ++cascade) {
     DrawSceneToShadowMaps(cmdList, vertexBufferView, indexBufferView,
-                          modelGeometry, submeshInstances,
-                          visibleSubmeshInstanceIndices, cascade);
+                          modelGeometry, submeshInstances, materialCB,
+                          samplerHeap->GetGPUDescriptorHandleForHeapStart(),
+                          cascade);
   }
 
   // Shadow pass overrides viewport/scissor to shadow map resolution.

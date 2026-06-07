@@ -70,8 +70,8 @@ class RenderingSystem {
       const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
       const ModelGeometry& modelGeometry,
       const std::vector<SubmeshInstance>& submeshInstances,
-      const std::vector<UINT>& visibleSubmeshInstanceIndices,
-      UINT cascadeIndex);
+      UploadBuffer<MaterialConstants>* materialCB,
+      D3D12_GPU_DESCRIPTOR_HANDLE samplerGpuStart, UINT cascadeIndex);
 
   ComPtr<ID3D12RootSignature> mGeometryRootSignature;
   ComPtr<ID3D12RootSignature> mComposeRootSignature;
