@@ -41,7 +41,7 @@ cbuffer cbCompose : register(b0) {
 
 float3 ReconstructWorldPos(float2 uv, float depth, out float linearDepth) {
     float x = uv.x * 2.0f - 1.0f;
-    float y = uv.y * 2.0f - 1.0f;
+    float y = 1.0f - uv.y * 2.0f;
 
     float4 ndcPos = float4(x, y, depth, 1.0f);
     float4 worldPos = mul(ndcPos, gInvViewProj);
@@ -60,11 +60,14 @@ float CalcShadowFactor(float3 worldPos, float3 normalW, float3 lightDirW, float 
         }
     }
     cascade = min(cascade, CASCADE_COUNT - 1);
+    float4 shadowPosH = mul(float4(worldPos, 1.0f), gLightViewProj[cascade]);
 
-    float4 shadowPosH = mul(float4(worldPos, 1.0f), gShadowTransforms[cascade]);
     shadowPosH.xyz /= shadowPosH.w;
-    if (shadowPosH.x < 0.0f || shadowPosH.x > 1.0f ||
-        shadowPosH.y < 0.0f || shadowPosH.y > 1.0f ||
+    float2 shadowTexC = shadowPosH.xy * 0.5f + 0.5f;
+    shadowTexC.y = 1.0f - shadowTexC.y;
+
+    if (shadowTexC.x < 0.0f || shadowTexC.x > 1.0f ||
+        shadowTexC.y < 0.0f || shadowTexC.y > 1.0f ||
         shadowPosH.z < 0.0f || shadowPosH.z > 1.0f) {
         return 1.0f;
     }
@@ -84,7 +87,7 @@ float CalcShadowFactor(float3 worldPos, float3 normalW, float3 lightDirW, float 
 
     float lit = 0;
     [unroll] for (int i=0;i<9;++i) {
-        lit += gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowPosH.xy + offsets[i] * texelSize, cascade), compareDepth).r;
+        lit += gShadowMap.SampleCmpLevelZero(gsamShadow, float3(shadowTexC + offsets[i] * texelSize, cascade), compareDepth).r;
     }
     return lit / 9.0f;
 }
