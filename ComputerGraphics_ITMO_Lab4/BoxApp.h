@@ -127,6 +127,7 @@ class BoxApp {
   std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
   std::unique_ptr<UploadBuffer<LightConstants>> mLightCB;
   std::unique_ptr<UploadBuffer<ComposeConstants>> mComposeCB;
+  ComposeConstants mComposeConstants = {};
   std::unique_ptr<UploadBuffer<MaterialConstants>> mMaterialCB = nullptr;
 
   // Вектор всех загруженных текстур
@@ -189,6 +190,12 @@ class BoxApp {
   std::vector<SubmeshInstance> mSubmeshInstances;
   bool mFrustumCullingEnabled = true;
   bool mFrustumCullingToggleKeyWasDown = false;
+  bool mMonitorEffectEnabled = false;
+  bool mMonitorEffectToggleKeyWasDown = false;
+  bool mFishEyeEnabled = false;
+  bool mFishEyeToggleKeyWasDown = false;
+  bool mDitheringEnabled = false;
+  bool mDitheringToggleKeyWasDown = false;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;

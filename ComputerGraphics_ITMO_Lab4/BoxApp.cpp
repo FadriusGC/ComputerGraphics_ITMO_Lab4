@@ -57,6 +57,173 @@ DirectX::BoundingBox TransformBoundingBox(
   DirectX::BoundingBox::CreateFromPoints(worldBounds, minCorner, maxCorner);
   return worldBounds;
 }
+
+DirectX::SimpleMath::Vector3 GetFrustumCornerWorld(
+    const DirectX::SimpleMath::Matrix& invViewProj, float ndcX, float ndcY,
+    float ndcZ) {
+  const DirectX::SimpleMath::Vector4 clip(ndcX, ndcY, ndcZ, 1.0f);
+  DirectX::SimpleMath::Vector4 world =
+      DirectX::SimpleMath::Vector4::Transform(clip, invViewProj);
+  world /= world.w;
+  return DirectX::SimpleMath::Vector3(world.x, world.y, world.z);
+}
+void AppendAlphaTestFence(ModelGeometry& geometry,
+                          std::vector<SceneObject>& sceneObjects) {
+  constexpr float kFenceWidth = 360.0f;
+  constexpr float kFenceHeight = 140.0f;
+  constexpr float kFenceTileU = 3.0f;
+
+  const uint32_t vertexOffset = static_cast<uint32_t>(geometry.Vertices.size());
+  const UINT indexStart = static_cast<UINT>(geometry.Indices.size());
+  const UINT submeshStart = static_cast<UINT>(geometry.Submeshes.size());
+  const UINT materialIndex = static_cast<UINT>(geometry.Materials.size());
+
+  Material fenceMaterial;
+  fenceMaterial.Name = "AlphaTestFence";
+  fenceMaterial.DiffuseTexture = "fence_texture.dds";
+  fenceMaterial.Data.DiffuseAlbedo = {1.0f, 1.0f, 1.0f, 1.0f};
+  fenceMaterial.Data.FresnelR0 = {0.02f, 0.02f, 0.02f};
+  fenceMaterial.Data.Roughness = 0.45f;
+  fenceMaterial.Data.HasNormalMap = 0.0f;
+  fenceMaterial.Data.HasDisplacementMap = 0.0f;
+  fenceMaterial.Data.HasRoughnessMap = 0.0f;
+  fenceMaterial.Data.DisplacementScale = 0.0f;
+  geometry.Materials.push_back(fenceMaterial);
+
+  auto makeVertex = [](float x, float y, float z, float u, float v) {
+    Vertex vertex;
+    vertex.Pos = {x, y, z};
+    vertex.Normal = {0.0f, 0.0f, -1.0f};
+    vertex.TexC = {u, v};
+    vertex.Color = {1.0f, 1.0f, 1.0f, 1.0f};
+    vertex.Tangent = {1.0f, 0.0f, 0.0f};
+    vertex.Bitangent = {0.0f, 1.0f, 0.0f};
+    return vertex;
+  };
+
+  geometry.Vertices.push_back(
+      makeVertex(-kFenceWidth * 0.5f, 0.0f, 0.0f, 0.0f, 1.0f));
+  geometry.Vertices.push_back(
+      makeVertex(-kFenceWidth * 0.5f, kFenceHeight, 0.0f, 0.0f, 0.0f));
+  geometry.Vertices.push_back(
+      makeVertex(kFenceWidth * 0.5f, kFenceHeight, 0.0f, kFenceTileU, 0.0f));
+  geometry.Vertices.push_back(
+      makeVertex(kFenceWidth * 0.5f, 0.0f, 0.0f, kFenceTileU, 1.0f));
+
+  geometry.Indices.insert(
+      geometry.Indices.end(),
+      {vertexOffset + 0, vertexOffset + 1, vertexOffset + 2, vertexOffset + 0,
+       vertexOffset + 2, vertexOffset + 3});
+
+  Submesh fenceSubmesh;
+  fenceSubmesh.MaterialIndex = materialIndex;
+  fenceSubmesh.IndexCount = 6;
+  fenceSubmesh.StartIndexLocation = indexStart;
+  fenceSubmesh.LodIndexCount = {6, 6, 6};
+  fenceSubmesh.LodStartIndexLocation = {indexStart, indexStart, indexStart};
+  DirectX::BoundingBox::CreateFromPoints(
+      fenceSubmesh.Bounds,
+      DirectX::SimpleMath::Vector3(-kFenceWidth * 0.5f, 0.0f, -0.05f),
+      DirectX::SimpleMath::Vector3(kFenceWidth * 0.5f, kFenceHeight, 0.05f));
+  geometry.Submeshes.push_back(fenceSubmesh);
+
+  SceneObject fenceObject;
+  fenceObject.SubmeshStart = submeshStart;
+  fenceObject.SubmeshCount = 1;
+  fenceObject.World =
+      DirectX::SimpleMath::Matrix::CreateRotationY(
+          DirectX::XMConvertToRadians(90.0f)) *
+      DirectX::SimpleMath::Matrix::CreateTranslation(120.0f, 0.0f, 0.0f);
+  fenceObject.LocalBounds = fenceSubmesh.Bounds;
+  fenceObject.WorldBounds =
+      TransformBoundingBox(fenceObject.LocalBounds, fenceObject.World);
+  fenceObject.TessellationParams =
+      DirectX::SimpleMath::Vector4(1000.0f, 1001.0f, 1.0f, 1.0f);
+  fenceObject.LodDistances =
+      DirectX::SimpleMath::Vector4(1000.0f, 1001.0f, 0.0f, 0.0f);
+  fenceObject.WaveParams = DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  sceneObjects.push_back(fenceObject);
+}
+
+void ComputeCascadeShadowTransform(
+    const DirectX::SimpleMath::Matrix& view,
+    const DirectX::SimpleMath::Matrix& proj,
+    const DirectX::SimpleMath::Vector3& lightDir, float splitNear,
+    float splitFar, float mapResolution,
+    DirectX::SimpleMath::Matrix& outShadowTransform,
+    DirectX::SimpleMath::Matrix& outLightViewProj) {
+  const auto invViewProj = (view * proj).Invert();
+
+  std::array<DirectX::SimpleMath::Vector3, 8> frustumCorners = {
+      GetFrustumCornerWorld(invViewProj, -1.0f, -1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, +1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, +1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, -1.0f, 0.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, -1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, -1.0f, +1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, +1.0f, 1.0f),
+      GetFrustumCornerWorld(invViewProj, +1.0f, -1.0f, 1.0f)};
+
+  const float cameraNear = 0.1f;
+  const float cameraFar = 1000.0f;
+  const float nearFactor = (splitNear - cameraNear) / (cameraFar - cameraNear);
+  const float farFactor = (splitFar - cameraNear) / (cameraFar - cameraNear);
+
+  std::array<DirectX::SimpleMath::Vector3, 8> cascadeCorners;
+  for (int i = 0; i < 4; ++i) {
+    const auto ray = frustumCorners[i + 4] - frustumCorners[i];
+    cascadeCorners[i] = frustumCorners[i] + ray * nearFactor;
+    cascadeCorners[i + 4] = frustumCorners[i] + ray * farFactor;
+  }
+
+  DirectX::SimpleMath::Vector3 center(0, 0, 0);
+  for (const auto& c : cascadeCorners) center += c;
+  center /= 8.0f;
+
+  float radius = 0.0f;
+  for (const auto& c : cascadeCorners) {
+    radius = std::max(radius, (c - center).Length());
+  }
+  radius = std::ceil(radius * 16.0f) / 16.0f;
+
+  auto normalizedLightDir = lightDir;
+  if (normalizedLightDir.LengthSquared() < 1e-6f) {
+    normalizedLightDir = DirectX::SimpleMath::Vector3(0.0f, -1.0f, 0.0f);
+  } else {
+    normalizedLightDir.Normalize();
+  }
+  const DirectX::SimpleMath::Vector3 up =
+      std::abs(normalizedLightDir.Dot(DirectX::SimpleMath::Vector3::Up)) > 0.98f
+          ? DirectX::SimpleMath::Vector3(0.0f, 0.0f, 1.0f)
+          : DirectX::SimpleMath::Vector3::Up;
+
+  const auto lightPos = center - normalizedLightDir * (radius * 2.0f);
+  const auto lightView =
+      DirectX::SimpleMath::Matrix::CreateLookAt(lightPos, center, up);
+
+  DirectX::SimpleMath::Vector3 centerLS =
+      DirectX::SimpleMath::Vector3::Transform(center, lightView);
+  const float texelSize = (2.0f * radius) / mapResolution;
+  centerLS.x = std::floor(centerLS.x / texelSize) * texelSize;
+  centerLS.y = std::floor(centerLS.y / texelSize) * texelSize;
+
+  const auto snappedCenterWS =
+      DirectX::SimpleMath::Vector3::Transform(centerLS, lightView.Invert());
+  const auto snappedLightPos =
+      snappedCenterWS - normalizedLightDir * (radius * 2.0f);
+  const auto snappedLightView = DirectX::SimpleMath::Matrix::CreateLookAt(
+      snappedLightPos, snappedCenterWS, up);
+
+  const auto lightProj =
+      DirectX::SimpleMath::Matrix::CreateOrthographicOffCenter(
+          -radius, radius, -radius, radius, 0.0f, radius * 4.0f);
+  const DirectX::SimpleMath::Matrix tex(0.5f, 0.0f, 0.0f, 0.0f, 0.0f, -0.5f,
+                                        0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+                                        0.5f, 0.5f, 0.0f, 1.0f);
+  const auto lightViewProj = snappedLightView * lightProj;
+  outLightViewProj = lightViewProj.Transpose();
+  outShadowTransform = (lightViewProj * tex).Transpose();
+}
 }  // namespace
 
 BoxApp::BoxApp(HINSTANCE hInstance)
@@ -196,7 +363,7 @@ void BoxApp::BuildDescriptorHeaps() {
       mDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC samplerHeapDesc = {};
-  samplerHeapDesc.NumDescriptors = 1;
+  samplerHeapDesc.NumDescriptors = 2;
   samplerHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
   samplerHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(mDevice->CreateDescriptorHeap(&samplerHeapDesc,
@@ -510,6 +677,8 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
   }
+
+  AppendAlphaTestFence(mModelGeometry, mSceneObjects);
 
   for (auto& object : mSceneObjects) {
     bool hasBounds = false;
@@ -943,8 +1112,24 @@ void BoxApp::CreateSamplerHeap() {
   samplerDesc.MaxAnisotropy = 1;
   samplerDesc.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
 
-  mDevice->CreateSampler(&samplerDesc,
-                         mSamplerHeap->GetCPUDescriptorHandleForHeapStart());
+  auto base = mSamplerHeap->GetCPUDescriptorHandleForHeapStart();
+  mDevice->CreateSampler(&samplerDesc, base);
+
+  D3D12_SAMPLER_DESC shadowSampler = samplerDesc;
+  shadowSampler.Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+  shadowSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+  shadowSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+  shadowSampler.BorderColor[0] = 1.0f;
+  shadowSampler.BorderColor[1] = 1.0f;
+  shadowSampler.BorderColor[2] = 1.0f;
+  shadowSampler.BorderColor[3] = 1.0f;
+  auto offset =
+      CD3DX12_CPU_DESCRIPTOR_HANDLE(base, 1,
+                                    mDevice->GetDescriptorHandleIncrementSize(
+                                        D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
+  mDevice->CreateSampler(&shadowSampler, offset);
 }
 
 void BoxApp::BuildPSO() {
@@ -1269,6 +1454,26 @@ void BoxApp::Update(const GameTimer& gt) {
     mFrustumCullingEnabled = !mFrustumCullingEnabled;
   }
   mFrustumCullingToggleKeyWasDown = isToggleKeyDown;
+
+  const bool isMonitorToggleKeyDown = (GetAsyncKeyState('1') & 0x8000) != 0;
+  if (isMonitorToggleKeyDown && !mMonitorEffectToggleKeyWasDown) {
+    mMonitorEffectEnabled = !mMonitorEffectEnabled;
+  }
+  mMonitorEffectToggleKeyWasDown = isMonitorToggleKeyDown;
+
+  const bool isFishEyeToggleKeyDown = (GetAsyncKeyState('2') & 0x8000) != 0;
+  if (isFishEyeToggleKeyDown && !mFishEyeToggleKeyWasDown) {
+    mFishEyeEnabled = !mFishEyeEnabled;
+  }
+  mFishEyeToggleKeyWasDown = isFishEyeToggleKeyDown;
+
+  const bool ditheringKeyDown = (GetAsyncKeyState('3') & 0x8000) != 0;
+
+  if (ditheringKeyDown && !mDitheringToggleKeyWasDown) {
+    mDitheringEnabled = !mDitheringEnabled;
+  }
+
+  mDitheringToggleKeyWasDown = ditheringKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
@@ -1337,78 +1542,102 @@ void BoxApp::Update(const GameTimer& gt) {
   lightConstants.CameraPosition = cameraPosition;
   mLightCB->CopyData(0, lightConstants);
 
-  ComposeConstants composeConstants = {};
-  composeConstants.InvViewProj = viewProj.Invert().Transpose();
-  composeConstants.CameraPosition =
+  mComposeConstants = {};
+  mComposeConstants.InvViewProj = viewProj.Invert().Transpose();
+  mComposeConstants.CameraPosition =
       DirectX::SimpleMath::Vector4(mCamPos.x, mCamPos.y, mCamPos.z, 1.0f);
-  composeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
+  mComposeConstants.ScreenSize = DirectX::SimpleMath::Vector4(
       static_cast<float>(WIDTH), static_cast<float>(HEIGHT),
       1.0f / static_cast<float>(WIDTH), 1.0f / static_cast<float>(HEIGHT));
   constexpr size_t kStaticLightCount = 3;
   static_assert(
       kFallingLightCount + kStaticLightCount <= ComposeConstants::kMaxLights,
       "слишком много источников для ComposeConstants::Lights array");
-  composeConstants.LightCount = DirectX::SimpleMath::Vector4(
-      static_cast<float>(mFallingLights.size() + kStaticLightCount), 0.0f, 0.0f,
-      0.0f);
+  mComposeConstants.LightCount = DirectX::SimpleMath::Vector4(
+      static_cast<float>(kStaticLightCount), 0.0f, 0.0f, 0.0f);
+
+  mComposeConstants.CascadeSplits =
+      DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
+
+  mComposeConstants.PostProcessParams =
+      DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
+
+  mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
+      mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
+      mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
+
+  DirectX::SimpleMath::Vector3 lightDir(-0.55f, -0.75f, -0.35f);
+  lightDir.Normalize();
+  const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
+                                                                600.0f};
+  float previousSplit = 0.1f;
+  for (int i = 0; i < ComposeConstants::kCascadeCount; ++i) {
+    ComputeCascadeShadowTransform(mView, mProj, lightDir, previousSplit,
+                                  cascadeRanges[i], 2048.0f,
+                                  mComposeConstants.ShadowTransforms[i],
+                                  mComposeConstants.LightViewProj[i]);
+    previousSplit = cascadeRanges[i];
+  }
 
   // Падающие point lights с приземлением на пол. занимают lights[0-3]
   const float deltaTime = gt.DeltaTime();
-  for (size_t i = 0; i < mFallingLights.size(); ++i) {
-    auto& fallingLight = mFallingLights[i];
-    if (fallingLight.Position.y > fallingLight.GroundY) {
-      fallingLight.Position.y = std::max(
-          fallingLight.GroundY,
-          fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
-    } else {
-      fallingLight.CooldownAfterLanding -= deltaTime;
-      if (fallingLight.CooldownAfterLanding <= 0.0f) {
-        ResetFallingLight(fallingLight);
-      }
-    }
-    composeConstants.Lights[i].PositionWorldAndRange =
-        DirectX::SimpleMath::Vector4(
-            fallingLight.Position.x, fallingLight.Position.y,
-            fallingLight.Position.z, fallingLight.Range);
-    composeConstants.Lights[i].DirectionAndType =
-        DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-    composeConstants.Lights[i].ColorAndIntensity = DirectX::SimpleMath::Vector4(
-        fallingLight.Color.x, fallingLight.Color.y, fallingLight.Color.z,
-        fallingLight.Intensity);
-  }
+  // for (size_t i = 0; i < mFallingLights.size(); ++i) {
+  //   auto& fallingLight = mFallingLights[i];
+  //   if (fallingLight.Position.y > fallingLight.GroundY) {
+  //     fallingLight.Position.y = std::max(
+  //         fallingLight.GroundY,
+  //         fallingLight.Position.y - fallingLight.FallSpeed * deltaTime);
+  //   } else {
+  //     fallingLight.CooldownAfterLanding -= deltaTime;
+  //     if (fallingLight.CooldownAfterLanding <= 0.0f) {
+  //       ResetFallingLight(fallingLight);
+  //     }
+  //   }
+  //   mComposeConstants.Lights[i].PositionWorldAndRange =
+  //       DirectX::SimpleMath::Vector4(
+  //           fallingLight.Position.x, fallingLight.Position.y,
+  //           fallingLight.Position.z, fallingLight.Range);
+  //   mComposeConstants.Lights[i].DirectionAndType =
+  //       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+  //   mComposeConstants.Lights[i].ColorAndIntensity =
+  //       DirectX::SimpleMath::Vector4(fallingLight.Color.x,
+  //       fallingLight.Color.y,
+  //                                    fallingLight.Color.z,
+  //                                    fallingLight.Intensity);
+  // }
 
   const size_t directionalLightIndex = 0;
   const size_t firstSpotLightIndex = directionalLightIndex + 1;
   const size_t secondSpotLightIndex = directionalLightIndex + 2;
   // Directional: солнце типо
-  composeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
+  mComposeConstants.Lights[directionalLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-  composeConstants.Lights[directionalLightIndex].DirectionAndType =
-      DirectX::SimpleMath::Vector4(-0.35f, -1.0f, 0.1f, 1.0f);
-  composeConstants.Lights[directionalLightIndex].ColorAndIntensity =
+  mComposeConstants.Lights[directionalLightIndex].DirectionAndType =
+      DirectX::SimpleMath::Vector4(lightDir.x, lightDir.y, lightDir.z, 1.0f);
+  mComposeConstants.Lights[directionalLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 
   // Spot #1: спот щеленый
-  composeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =
+  mComposeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 14445.0f);
-  composeConstants.Lights[firstSpotLightIndex].DirectionAndType =
+  mComposeConstants.Lights[firstSpotLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.5f, -1.0f, 2.0f);
-  composeConstants.Lights[firstSpotLightIndex].ColorAndIntensity =
+  mComposeConstants.Lights[firstSpotLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.0f, 5.0f);
-  composeConstants.Lights[firstSpotLightIndex].Params =
+  mComposeConstants.Lights[firstSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
 
   // Spot #2: красный
-  composeConstants.Lights[secondSpotLightIndex].PositionWorldAndRange =
+  mComposeConstants.Lights[secondSpotLightIndex].PositionWorldAndRange =
       DirectX::SimpleMath::Vector4(0.0f, 12.0f, -5.0f, 155500.0f);
-  composeConstants.Lights[secondSpotLightIndex].DirectionAndType =
+  mComposeConstants.Lights[secondSpotLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(0.0f, 0.0f, 1.0f, 2.0f);
-  composeConstants.Lights[secondSpotLightIndex].ColorAndIntensity =
+  mComposeConstants.Lights[secondSpotLightIndex].ColorAndIntensity =
       DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 111.8f);
-  composeConstants.Lights[secondSpotLightIndex].Params =
+  mComposeConstants.Lights[secondSpotLightIndex].Params =
       DirectX::SimpleMath::Vector4(0.96f, 0.82f, 0.0f, 0.0f);
 
-  mComposeCB->CopyData(0, composeConstants);
+  mComposeCB->CopyData(0, mComposeConstants);
 
   static float time = 0.0f;
   time += gt.DeltaTime();
@@ -1452,7 +1681,7 @@ void BoxApp::Draw(const GameTimer& gt) {
       mModelGeometry, mSceneObjects, mSubmeshInstances,
       mVisibleSubmeshInstanceIndices, mMaterialCB.get(),
       mDepthStencilBuffer.Get(), mComposeCB->Resource()->GetGPUVirtualAddress(),
-      gt.DeltaTime(), mView * mProj, mCamPos);
+      mComposeConstants, gt.DeltaTime(), mView * mProj, mCamPos);
 
   ThrowIfFailed(mCommandList->Close());
 

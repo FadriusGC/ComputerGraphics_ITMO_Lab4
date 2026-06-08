@@ -4,6 +4,7 @@
 #include "GBuffer.h"
 #include "Material.h"
 #include "ShaderHelper.h"
+#include "ShadowMap.h"
 #include "Structures.h"
 #include "UploadBuffer.h"
 
@@ -11,12 +12,14 @@ class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
   static constexpr UINT kGBufferSrvStart = 2;
+  static constexpr UINT kDepthSrvIndex =
+      kGBufferSrvStart + GBuffer::kRenderTargetCount;  // = 4
   static constexpr UINT kObjectCbvStart = 5;
   static constexpr UINT kObjectCbvReservedCount = 128;
-  static constexpr UINT kDepthSrvIndex =
-      kObjectCbvStart + kObjectCbvReservedCount;
-  static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
+  static constexpr UINT kTextureSrvStart =
+      kObjectCbvStart + kObjectCbvReservedCount;  // = 133
   static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
+  static constexpr UINT kShadowMapSrvIndex = kParticleSmokeSrvIndex + 1;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
@@ -37,13 +40,15 @@ class RenderingSystem {
               const std::vector<UINT>& visibleSubmeshInstanceIndices,
               UploadBuffer<MaterialConstants>* materialCB,
               ID3D12Resource* depthBuffer,
-              D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress, float deltaTime,
+              D3D12_GPU_VIRTUAL_ADDRESS composeCBAddress,
+              const ComposeConstants& composeConstants, float deltaTime,
               const DirectX::SimpleMath::Matrix& viewProj,
               const DirectX::SimpleMath::Vector3& cameraPosition);
 
  private:
   void BuildGeometryRootSignature(ID3D12Device* device);
   void BuildComposeRootSignature(ID3D12Device* device);
+  void BuildShadowRootSignature(ID3D12Device* device);
   void BuildParticlesComputeRootSignature(ID3D12Device* device);
   void BuildParticlesRenderRootSignature(ID3D12Device* device);
   void BuildGeometryPSO(ID3D12Device* device);
@@ -60,13 +65,23 @@ class RenderingSystem {
   void SimulateParticles(ID3D12GraphicsCommandList* cmdList, float deltaTime,
                          const DirectX::SimpleMath::Vector3& cameraPosition);
   void RenderParticles(ID3D12GraphicsCommandList* cmdList);
+  void DrawSceneToShadowMaps(
+      ID3D12GraphicsCommandList* cmdList,
+      const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
+      const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
+      const ModelGeometry& modelGeometry,
+      const std::vector<SubmeshInstance>& submeshInstances,
+      UploadBuffer<MaterialConstants>* materialCB,
+      D3D12_GPU_DESCRIPTOR_HANDLE samplerGpuStart, UINT cascadeIndex);
 
   ComPtr<ID3D12RootSignature> mGeometryRootSignature;
   ComPtr<ID3D12RootSignature> mComposeRootSignature;
+  ComPtr<ID3D12RootSignature> mShadowRootSignature;
   ComPtr<ID3D12RootSignature> mParticlesComputeRootSignature;
   ComPtr<ID3D12RootSignature> mParticlesRenderRootSignature;
   ComPtr<ID3D12PipelineState> mGeometryPSO;
   ComPtr<ID3D12PipelineState> mComposePSO;
+  ComPtr<ID3D12PipelineState> mShadowPSO;
   ComPtr<ID3D12PipelineState> mParticlesEmitPSO;
   ComPtr<ID3D12PipelineState> mParticlesSimulatePSO;
   ComPtr<ID3D12PipelineState> mParticlesInitPSO;
@@ -78,6 +93,8 @@ class RenderingSystem {
   ComPtr<ID3DBlob> mGeometryDS;
   ComPtr<ID3DBlob> mComposeVS;
   ComPtr<ID3DBlob> mComposePS;
+  ComPtr<ID3DBlob> mShadowVS;
+  ComPtr<ID3DBlob> mShadowPS;
   ComPtr<ID3DBlob> mParticlesEmitCS;
   ComPtr<ID3DBlob> mParticlesInitCS;
   ComPtr<ID3DBlob> mParticlesSimulateCS;
@@ -87,6 +104,8 @@ class RenderingSystem {
 
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
   GBuffer mGBuffer;
+  ShadowMap mShadowMap;
+  std::unique_ptr<UploadBuffer<DirectX::SimpleMath::Matrix>> mShadowPassCB;
 
   struct ParticleGpuData {
     DirectX::SimpleMath::Vector3 Position;
@@ -119,7 +138,7 @@ class RenderingSystem {
   };
 
   static constexpr UINT kParticleMaxCount = 16384;
-  static constexpr UINT kParticlePoolSrvIndex = kTextureSrvStart + 256;
+  static constexpr UINT kParticlePoolSrvIndex = kShadowMapSrvIndex + 1;
   static constexpr UINT kParticlePoolUavIndex = kParticlePoolSrvIndex + 1;
   static constexpr UINT kDeadListAUavIndex = kParticlePoolSrvIndex + 2;
   static constexpr UINT kDeadListBUavIndex = kParticlePoolSrvIndex + 3;
