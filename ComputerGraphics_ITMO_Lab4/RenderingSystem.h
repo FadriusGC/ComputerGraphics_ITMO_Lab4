@@ -12,11 +12,12 @@ class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
   static constexpr UINT kGBufferSrvStart = 2;
+  static constexpr UINT kDepthSrvIndex =
+      kGBufferSrvStart + GBuffer::kRenderTargetCount;  // = 4
   static constexpr UINT kObjectCbvStart = 5;
   static constexpr UINT kObjectCbvReservedCount = 128;
-  static constexpr UINT kDepthSrvIndex =
-      kObjectCbvStart + kObjectCbvReservedCount;
-  static constexpr UINT kTextureSrvStart = kDepthSrvIndex + 1;
+  static constexpr UINT kTextureSrvStart =
+      kObjectCbvStart + kObjectCbvReservedCount;  // = 133
   static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
   static constexpr UINT kShadowMapSrvIndex = kParticleSmokeSrvIndex + 1;
 
