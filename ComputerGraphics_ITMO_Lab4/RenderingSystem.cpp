@@ -105,7 +105,7 @@ void RenderingSystem::BuildInputLayout() {
 }
 
 void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[7];
+  CD3DX12_ROOT_PARAMETER params[8];
 
   CD3DX12_DESCRIPTOR_RANGE cbvTable0;
   cbvTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
@@ -133,8 +133,12 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 
   params[6].InitAsConstantBufferView(2);
 
+  CD3DX12_DESCRIPTOR_RANGE metallicSrvTable;
+  metallicSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 4);
+  params[7].InitAsDescriptorTable(1, &metallicSrvTable);  // t4 metallic
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      7, params, 0, nullptr,
+      8, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -147,7 +151,7 @@ void RenderingSystem::BuildGeometryRootSignature(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
-  CD3DX12_ROOT_PARAMETER params[4];
+  CD3DX12_ROOT_PARAMETER params[5];
 
   CD3DX12_DESCRIPTOR_RANGE gbufferSrvTable;
   gbufferSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
@@ -158,13 +162,17 @@ void RenderingSystem::BuildComposeRootSignature(ID3D12Device* device) {
   params[1].InitAsDescriptorTable(1, &shadowSrvTable);
 
   CD3DX12_DESCRIPTOR_RANGE samplerTable;
-  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 2, 0);
+  samplerTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 3, 0);  // s0,s1,s2
   params[2].InitAsDescriptorTable(1, &samplerTable);
 
   params[3].InitAsConstantBufferView(0);
 
+  CD3DX12_DESCRIPTOR_RANGE iblSrvTable;
+  iblSrvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 4);  // t4,t5,t6 IBL
+  params[4].InitAsDescriptorTable(1, &iblSrvTable);
+
   CD3DX12_ROOT_SIGNATURE_DESC desc(
-      4, params, 0, nullptr,
+      5, params, 0, nullptr,
       D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
   ComPtr<ID3DBlob> serialized;
@@ -328,8 +336,8 @@ void RenderingSystem::BuildComposePSO(ID3D12Device* device) {
   shadowPso.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
   shadowPso.NumRenderTargets = 0;
   shadowPso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-  shadowPso.RasterizerState.DepthBias = 100000;
-  shadowPso.RasterizerState.SlopeScaledDepthBias = 1.0f;
+  shadowPso.RasterizerState.DepthBias = 2500;
+  shadowPso.RasterizerState.SlopeScaledDepthBias = 1.5f;
   ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowPso,
                                                     IID_PPV_ARGS(&mShadowPSO)));
 }
@@ -767,6 +775,7 @@ void RenderingSystem::Render(
     cmdList->SetGraphicsRootDescriptorTable(2, defaultTextureHandle);
     cmdList->SetGraphicsRootDescriptorTable(3, defaultTextureHandle);
     cmdList->SetGraphicsRootDescriptorTable(4, defaultTextureHandle);
+    cmdList->SetGraphicsRootDescriptorTable(7, defaultTextureHandle);
   }
 
   for (UINT visibleInstanceIndex : visibleSubmeshInstanceIndices) {
@@ -844,6 +853,14 @@ void RenderingSystem::Render(
         cmdList->SetGraphicsRootDescriptorTable(4, roughnessHandle);
       }
 
+      if (mat.MetallicTextureIndex >= 0) {
+        CD3DX12_GPU_DESCRIPTOR_HANDLE metallicHandle(
+            cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(kTextureSrvStart + mat.MetallicTextureIndex),
+            cbvSrvDescriptorSize);
+        cmdList->SetGraphicsRootDescriptorTable(7, metallicHandle);
+      }
+
       D3D12_GPU_VIRTUAL_ADDRESS matCBAddress =
           materialCB->Resource()->GetGPUVirtualAddress() +
           static_cast<UINT64>(mat.MatCBIndex) * cbMaterialSize;
@@ -880,14 +897,26 @@ void RenderingSystem::Render(
   cmdList->SetGraphicsRootDescriptorTable(
       2, samplerHeap->GetGPUDescriptorHandleForHeapStart());
   cmdList->SetGraphicsRootConstantBufferView(3, composeCBAddress);
+  CD3DX12_GPU_DESCRIPTOR_HANDLE iblSrv(
+      cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(kIrradianceSrvIndex), cbvSrvDescriptorSize);
+  cmdList->SetGraphicsRootDescriptorTable(4, iblSrv);
   cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmdList->DrawInstanced(3, 1, 0, 0);
+
+  // Particles depth-test (DepthWriteMask = ZERO) but do not write depth, so
+  // move the buffer from PIXEL_SHADER_RESOURCE (compose) to DEPTH_READ before
+  // binding it as a DSV.
+  auto depthToRead = CD3DX12_RESOURCE_BARRIER::Transition(
+      depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+      D3D12_RESOURCE_STATE_DEPTH_READ);
+  cmdList->ResourceBarrier(1, &depthToRead);
 
   cmdList->OMSetRenderTargets(1, &backBufferRtv, true, &dsvHandle);
   RenderParticles(cmdList);
 
   auto depthToWrite = CD3DX12_RESOURCE_BARRIER::Transition(
-      depthBuffer, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+      depthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ,
       D3D12_RESOURCE_STATE_DEPTH_WRITE);
   cmdList->ResourceBarrier(1, &depthToWrite);
 

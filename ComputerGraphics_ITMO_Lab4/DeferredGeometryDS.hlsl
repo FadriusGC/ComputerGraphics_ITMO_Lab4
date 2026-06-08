@@ -36,6 +36,9 @@ cbuffer cbMaterial : register(b2) {
     float gHasDisplacementMap;
     float gHasRoughnessMap;
     float gDisplacementScale;
+    float gMetallic;
+    float gHasMetallicMap;
+    float2 gMatPadding;
     float4x4 gTexTransform;
 };
 

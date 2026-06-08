@@ -363,7 +363,7 @@ void BoxApp::BuildDescriptorHeaps() {
       mDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC samplerHeapDesc = {};
-  samplerHeapDesc.NumDescriptors = 2;
+  samplerHeapDesc.NumDescriptors = 3;  // s0 wrap, s1 shadow cmp, s2 IBL clamp
   samplerHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
   samplerHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ThrowIfFailed(mDevice->CreateDescriptorHeap(&samplerHeapDesc,
@@ -465,6 +465,7 @@ void BoxApp::BuildBoxGeometry() {
   const DirectX::SimpleMath::Vector3 kMountainPosition(140.0f, -10.0f, 30.0f);
   ModelGeometry sponzaGeometry;
   ModelGeometry mountainGeometry;
+  ModelGeometry cupGeometry;
   mSceneObjects.clear();
   mModelGeometry = {};
 
@@ -478,6 +479,22 @@ void BoxApp::BuildBoxGeometry() {
   const bool sponzaLoaded = ModelLoader::LoadModel(sponzaPath, sponzaGeometry);
   const bool mountainLoaded =
       ModelLoader::LoadModel(mountainPath, mountainGeometry);
+
+  const std::string cupPath =
+      "C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      "ComputerGraphics_ITMO_Lab4/coffee_cup_obj.obj";
+  const bool cupLoaded = ModelLoader::LoadModel(cupPath, cupGeometry);
+  if (cupLoaded) {
+    for (auto& mat : cupGeometry.Materials) {
+      // PBR: использует base color texture как альбедо
+      mat.Data.DiffuseAlbedo =
+          DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+      mat.Data.FresnelR0 = DirectX::SimpleMath::Vector3(0.04f, 0.04f, 0.04f);
+      if (mat.Data.HasRoughnessMap < 0.5f) {
+        mat.Data.Roughness = 0.5f;
+      }
+    }
+  }
 
   if (!mountainGeometry.Materials.empty()) {
     for (auto& mat : mountainGeometry.Materials) {
@@ -676,6 +693,20 @@ void BoxApp::BuildBoxGeometry() {
           DirectX::SimpleMath::Vector4(0.90f, 0.75f, 0.0f, 0.0f),
           DirectX::SimpleMath::Vector4(0.05f, 3.57f, 1.35f, 0.0f));
     }
+
+    if (cupLoaded) {
+      // ставим кружку по центру спонзы и побольше делдаем
+      const float kCupScale = 40.0f;
+      const DirectX::SimpleMath::Vector3 kCupPosition(-120.0f, 0.0f, 0.0f);
+      appendGeometry(
+          cupGeometry,
+          DirectX::SimpleMath::Matrix::CreateScale(kCupScale) *
+              DirectX::SimpleMath::Matrix::CreateTranslation(kCupPosition),
+          DirectX::SimpleMath::Vector4(1.0f, 100.0f, 1.0f, 1.0f),  // no tess
+          DirectX::SimpleMath::Vector4(1.0e4f, 2.0e4f, 3.0e4f, 0.0f),  // LOD0
+          DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.0f, 0.0f),   // full geom
+          DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f));  // no wave
+    }
   }
 
   AppendAlphaTestFence(mModelGeometry, mSceneObjects);
@@ -814,6 +845,7 @@ void BoxApp::BuildBoxGeometry() {
 
   // Загружаем все текстуры, связанные с материалами
   LoadAllTextures();
+  LoadIblMaps();
 
   for (UINT i = 0; i < numMaterials; ++i) {
     mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
@@ -1002,6 +1034,7 @@ void BoxApp::LoadAllTextures() {
     addTextureName(mat.NormalTexture);
     addTextureName(mat.DisplacementTexture);
     addTextureName(mat.RoughnessTexture);
+    addTextureName(mat.MetallicTexture);
   }
 
   // Загружаем текстуры
@@ -1068,6 +1101,16 @@ void BoxApp::LoadAllTextures() {
     } else {
       mat.Data.HasRoughnessMap = 0.0f;
     }
+
+    if (!mat.MetallicTexture.empty()) {
+      auto it = textureNameToIndex.find(mat.MetallicTexture);
+      if (it != textureNameToIndex.end()) {
+        mat.MetallicTextureIndex = it->second;
+        mat.Data.HasMetallicMap = 1.0f;
+      }
+    } else {
+      mat.Data.HasMetallicMap = 0.0f;
+    }
   }
   auto smokeTexture = std::make_unique<Texture>();
   smokeTexture->name = "smoke.dds";
@@ -1100,6 +1143,56 @@ void BoxApp::CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex) {
   mDevice->CreateShaderResourceView(textureResource.Get(), &srvDesc, srvHandle);
 }
 
+void BoxApp::CreateCubeSRV(ComPtr<ID3D12Resource> textureResource,
+                           int heapIndex) {
+  CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(
+      mCbvHeap->GetCPUDescriptorHandleForHeapStart(), heapIndex,
+      mCbvSrvDescriptorSize);
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = textureResource->GetDesc().Format;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+  srvDesc.TextureCube.MostDetailedMip = 0;
+  srvDesc.TextureCube.MipLevels = textureResource->GetDesc().MipLevels;
+  srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+
+  mDevice->CreateShaderResourceView(textureResource.Get(), &srvDesc, srvHandle);
+}
+
+void BoxApp::LoadIblMaps() {
+  const std::wstring dir =
+      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
+      L"ComputerGraphics_ITMO_Lab4/textures/";
+
+  // ibl мапы
+  //   irradiance.dds   - RGBA16F cubemap (diffuse irradiance)
+  //   prefiltered.dds  - RGBA16F cubemap with roughness mips (specular)
+  //   brdf_lut.dds     - RG16F 2D LUT (split-sum BRDF integration)
+  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+      mDevice.Get(), mCommandList.Get(), (dir + L"irradiance.dds").c_str(),
+      mIrradianceMap, mIrradianceUpload));
+  CreateCubeSRV(mIrradianceMap, RenderingSystem::kIrradianceSrvIndex);
+
+  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+      mDevice.Get(), mCommandList.Get(), (dir + L"prefiltered.dds").c_str(),
+      mPrefilteredEnvMap, mPrefilteredEnvUpload));
+  CreateCubeSRV(mPrefilteredEnvMap, RenderingSystem::kPrefilteredEnvSrvIndex);
+
+  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
+      mDevice.Get(), mCommandList.Get(), (dir + L"brdf_lut.dds").c_str(),
+      mBrdfLut, mBrdfLutUpload));
+  CreateSRV(mBrdfLut, RenderingSystem::kBrdfLutSrvIndex);
+
+  const UINT prefilteredMips = mPrefilteredEnvMap->GetDesc().MipLevels;
+  mComposeConstants.IblParams = DirectX::SimpleMath::Vector4(
+      static_cast<float>(prefilteredMips > 0 ? prefilteredMips - 1 : 7),
+      0.2f,   // IBL intensity //было 1.0
+      1.0f,   // enable IBL
+      1.0f);  // ambient occlusion
+  OutputDebugStringA("IBL maps loaded.\n");
+}
+
 void BoxApp::CreateSamplerHeap() {
   D3D12_SAMPLER_DESC samplerDesc = {};
   samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1130,6 +1223,19 @@ void BoxApp::CreateSamplerHeap() {
                                     mDevice->GetDescriptorHandleIncrementSize(
                                         D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
   mDevice->CreateSampler(&shadowSampler, offset);
+
+  // s2: trilinear, clamped используется для IBL cubemaps и BRDF LUT.
+  D3D12_SAMPLER_DESC iblSampler = samplerDesc;
+  iblSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  iblSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  iblSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  iblSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  iblSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  auto iblHandle =
+      CD3DX12_CPU_DESCRIPTOR_HANDLE(base, 2,
+                                    mDevice->GetDescriptorHandleIncrementSize(
+                                        D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
+  mDevice->CreateSampler(&iblSampler, iblHandle);
 }
 
 void BoxApp::BuildPSO() {
@@ -1560,13 +1666,13 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
 
   mComposeConstants.PostProcessParams =
-      DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
+      DirectX::SimpleMath::Vector4(0.7f, 2.2f, 1.0f, 1.0f);  //.x был 1.0
 
   mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
       mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
 
-  DirectX::SimpleMath::Vector3 lightDir(-0.55f, -0.75f, -0.35f);
+  DirectX::SimpleMath::Vector3 lightDir(-0.55f, -1.0f, -0.35f);
   lightDir.Normalize();
   const float cascadeRanges[ComposeConstants::kCascadeCount] = {80.0f, 220.0f,
                                                                 600.0f};
@@ -1615,7 +1721,8 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.Lights[directionalLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(lightDir.x, lightDir.y, lightDir.z, 1.0f);
   mComposeConstants.Lights[directionalLightIndex].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
+      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f,
+                                   2.5f);  // поменял интенсити, раньше было 1.6
 
   // Spot #1: спот щеленый
   mComposeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =

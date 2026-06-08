@@ -113,6 +113,37 @@ bool ModelLoader::LoadModel(const std::string& filePath,
             ("Normal texture: " + material.NormalTexture + "\n").c_str());
       }
 
+      // Roughness texture. Blender OBJ export stores it in the
+      // map_Ns (SHININESS) slot.
+      aiString roughTexPath;
+      if (aiMat->GetTexture(aiTextureType_SHININESS, 0, &roughTexPath) ==
+          AI_SUCCESS) {
+        std::string fullPath = roughTexPath.C_Str();
+        size_t lastSlash = fullPath.find_last_of("/\\");
+        material.RoughnessTexture =
+            (lastSlash != std::string::npos) ? fullPath.substr(lastSlash + 1)
+                                             : fullPath;
+        material.Data.HasRoughnessMap = 1.0f;
+        OutputDebugStringA(
+            ("Roughness texture: " + material.RoughnessTexture + "\n")
+                .c_str());
+      }
+
+      // Metallic texture. Blender OBJ export stores it in the
+      // refl (REFLECTION) slot.
+      aiString metalTexPath;
+      if (aiMat->GetTexture(aiTextureType_REFLECTION, 0, &metalTexPath) ==
+          AI_SUCCESS) {
+        std::string fullPath = metalTexPath.C_Str();
+        size_t lastSlash = fullPath.find_last_of("/\\");
+        material.MetallicTexture =
+            (lastSlash != std::string::npos) ? fullPath.substr(lastSlash + 1)
+                                             : fullPath;
+        material.Data.HasMetallicMap = 1.0f;
+        OutputDebugStringA(
+            ("Metallic texture: " + material.MetallicTexture + "\n").c_str());
+      }
+
       outModelGeometry.Materials.push_back(material);
     }
   } else {

@@ -97,6 +97,10 @@ struct ComposeConstants {
   // x: enableMonitorEffect, y: totalTime, z/w: reserved
   DirectX::SimpleMath::Vector4 MonitorEffectParams =
       DirectX::SimpleMath::Vector4(1.0f, 0.0f, 0.0f, 0.0f);
+  // IBL controls. x: prefiltered env max mip (MAX_REFLECTION_LOD),
+  // y: IBL intensity, z: enable IBL (1/0), w: ambient occlusion factor.
+  DirectX::SimpleMath::Vector4 IblParams =
+      DirectX::SimpleMath::Vector4(7.0f, 1.0f, 1.0f, 1.0f);
   DirectX::SimpleMath::Matrix ShadowTransforms[kCascadeCount];
   DirectX::SimpleMath::Matrix LightViewProj[kCascadeCount];
   GpuLight Lights[kMaxLights];

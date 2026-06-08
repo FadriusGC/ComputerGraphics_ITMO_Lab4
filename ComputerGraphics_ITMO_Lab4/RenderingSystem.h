@@ -11,7 +11,10 @@
 class RenderingSystem {
  public:
   static constexpr UINT kGBufferRtvStart = SwapChainBufferCount;
-  static constexpr UINT kGBufferSrvStart = 2;
+  static constexpr UINT kGBufferSrvStart = 2;  // albedo = 2, normal = 3
+  // Compose reads scene depth as t2 (3rd descriptor of the same
+  // contiguous table as albedo/normal), so its SRV must sit right after
+  // the two G-buffer SRVs.
   static constexpr UINT kDepthSrvIndex =
       kGBufferSrvStart + GBuffer::kRenderTargetCount;  // = 4
   static constexpr UINT kObjectCbvStart = 5;
@@ -20,6 +23,12 @@ class RenderingSystem {
       kObjectCbvStart + kObjectCbvReservedCount;  // = 133
   static constexpr UINT kParticleSmokeSrvIndex = kTextureSrvStart + 255;
   static constexpr UINT kShadowMapSrvIndex = kParticleSmokeSrvIndex + 1;
+  // Particle buffers occupy kShadowMapSrvIndex + 1 .. +4 (private below).
+  // IBL resources form a contiguous SRV table for the compose pass.
+  static constexpr UINT kIblSrvStart = kShadowMapSrvIndex + 5;
+  static constexpr UINT kIrradianceSrvIndex = kIblSrvStart + 0;
+  static constexpr UINT kPrefilteredEnvSrvIndex = kIblSrvStart + 1;
+  static constexpr UINT kBrdfLutSrvIndex = kIblSrvStart + 2;
 
   void Initialize(ID3D12Device* device, UINT width, UINT height,
                   ID3D12DescriptorHeap* rtvHeap,
