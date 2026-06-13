@@ -309,6 +309,9 @@ bool BoxApp::Initialize() {
   mRenderingSystem.Initialize(mDevice.Get(), WIDTH, HEIGHT, mRtvHeap.Get(),
                               mCbvHeap.Get(), mRtvDescriptorSize,
                               mCbvSrvDescriptorSize);
+
+  BakeIblMaps();
+
   // Закрываем и выполняем все накопленные команды (геометрия + текстуры)
   ThrowIfFailed(mCommandList->Close());
 
@@ -486,7 +489,7 @@ void BoxApp::BuildBoxGeometry() {
   const bool cupLoaded = ModelLoader::LoadModel(cupPath, cupGeometry);
   if (cupLoaded) {
     for (auto& mat : cupGeometry.Materials) {
-      // PBR: использует base color texture как альбедо
+      // PBR: use the base-color texture directly as albedo.
       mat.Data.DiffuseAlbedo =
           DirectX::SimpleMath::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
       mat.Data.FresnelR0 = DirectX::SimpleMath::Vector3(0.04f, 0.04f, 0.04f);
@@ -695,7 +698,7 @@ void BoxApp::BuildBoxGeometry() {
     }
 
     if (cupLoaded) {
-      // ставим кружку по центру спонзы и побольше делдаем
+      // Coffee cup placed at the centre of the large sponza, scaled up.
       const float kCupScale = 40.0f;
       const DirectX::SimpleMath::Vector3 kCupPosition(-120.0f, 0.0f, 0.0f);
       appendGeometry(
@@ -845,7 +848,6 @@ void BoxApp::BuildBoxGeometry() {
 
   // Загружаем все текстуры, связанные с материалами
   LoadAllTextures();
-  LoadIblMaps();
 
   for (UINT i = 0; i < numMaterials; ++i) {
     mMaterialCB->CopyData(i, mModelGeometry.Materials[i].Data);
@@ -1160,37 +1162,440 @@ void BoxApp::CreateCubeSRV(ComPtr<ID3D12Resource> textureResource,
   mDevice->CreateShaderResourceView(textureResource.Get(), &srvDesc, srvHandle);
 }
 
-void BoxApp::LoadIblMaps() {
-  const std::wstring dir =
-      L"C:/Users/grish/source/repos/ComputerGraphics_ITMO_Lab4/"
-      L"ComputerGraphics_ITMO_Lab4/textures/";
+void BoxApp::BuildIblBakePipeline() {
+  // Root signature: b0 root constants (face index + roughness), a single
+  // source-environment cube SRV at t0, and a static linear-clamp sampler s0.
+  CD3DX12_DESCRIPTOR_RANGE envRange;
+  envRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
 
-  // ibl мапы
-  //   irradiance.dds   - RGBA16F cubemap (diffuse irradiance)
-  //   prefiltered.dds  - RGBA16F cubemap with roughness mips (specular)
-  //   brdf_lut.dds     - RG16F 2D LUT (split-sum BRDF integration)
-  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
-      mDevice.Get(), mCommandList.Get(), (dir + L"irradiance.dds").c_str(),
-      mIrradianceMap, mIrradianceUpload));
+  CD3DX12_ROOT_PARAMETER params[2];
+  params[0].InitAsConstants(4, 0);
+  params[1].InitAsDescriptorTable(1, &envRange, D3D12_SHADER_VISIBILITY_PIXEL);
+
+  D3D12_STATIC_SAMPLER_DESC samp = {};
+  samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+  samp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+  samp.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+  samp.MaxLOD = D3D12_FLOAT32_MAX;
+  samp.ShaderRegister = 0;
+  samp.RegisterSpace = 0;
+  samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+  CD3DX12_ROOT_SIGNATURE_DESC rootDesc(2, params, 1, &samp,
+                                       D3D12_ROOT_SIGNATURE_FLAG_NONE);
+  ComPtr<ID3DBlob> serialized;
+  ComPtr<ID3DBlob> errors;
+  ThrowIfFailed(D3D12SerializeRootSignature(
+      &rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, &errors));
+  ThrowIfFailed(mDevice->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                             serialized->GetBufferSize(),
+                                             IID_PPV_ARGS(&mBakeRootSig)));
+
+  // The bake shaders are embedded as source strings and compiled in memory
+  // (ShaderHelper::CompileSource -> D3DCompile)
+  static const char* kBakeVS = R"HLSL(
+struct VSOut { float4 Pos : SV_POSITION; float2 TexC : TEXCOORD; };
+VSOut VS(uint vid : SV_VertexID) {
+    VSOut o;
+    float2 p;
+    p.x = (vid == 2) ? 3.0f : -1.0f;
+    p.y = (vid == 1) ? 3.0f : -1.0f;
+    o.Pos = float4(p, 0.0f, 1.0f);
+    o.TexC = float2((p.x + 1.0f) * 0.5f, 1.0f - (p.y + 1.0f) * 0.5f);
+    return o;
+}
+)HLSL";
+
+  static const char* kBakeCommon = R"HLSL(
+static const float PI = 3.14159265359f;
+cbuffer BakeParams : register(b0) {
+    uint gFaceIndex; float gRoughness; float gPad0; float gPad1;
+};
+struct VSOut { float4 Pos : SV_POSITION; float2 TexC : TEXCOORD; };
+float3 FaceDir(uint face, float2 uv) {
+    float a = 2.0f * uv.x - 1.0f;
+    float b = 2.0f * uv.y - 1.0f;
+    float3 d;
+    if (face == 0)      d = float3( 1.0f,   -b,   -a);
+    else if (face == 1) d = float3(-1.0f,   -b,    a);
+    else if (face == 2) d = float3(   a, 1.0f,    b);
+    else if (face == 3) d = float3(   a,-1.0f,   -b);
+    else if (face == 4) d = float3(   a,   -b, 1.0f);
+    else                d = float3(  -a,   -b,-1.0f);
+    return normalize(d);
+}
+float3 SampleEnvironment(float3 dir) {
+    float y = clamp(dir.y, -1.0f, 1.0f);
+    float3 zenith  = float3(0.18f, 0.32f, 0.55f) * 1.7f;
+    float3 horizon = float3(0.60f, 0.58f, 0.60f) * 1.5f;
+    float3 ground  = float3(0.13f, 0.11f, 0.10f);
+    float t = saturate(y);
+    float3 sky = lerp(horizon, zenith, t);
+    float gt = saturate(-y * 2.0f);
+    float3 grnd = lerp(horizon * 0.55f, ground, gt);
+    float3 env = (y >= 0.0f) ? sky : grnd;
+    float3 sunDir = normalize(float3(0.55f, 1.0f, 0.35f));
+    float sd = clamp(dot(dir, sunDir), -1.0f, 1.0f);
+    float disk = saturate((sd - 0.9975f) / (1.0f - 0.9975f));
+    float3 sun = disk * float3(14.0f, 12.5f, 10.0f);
+    float3 glow = pow(saturate(sd), 80.0f) * float3(1.6f, 1.3f, 1.0f);
+    return env + sun + glow;
+}
+float RadicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10f;
+}
+float2 Hammersley(uint i, uint N) {
+    return float2(float(i) / float(N), RadicalInverse_VdC(i));
+}
+float3 ImportanceSampleGGX(float2 Xi, float3 N, float roughness) {
+    float a = roughness * roughness;
+    float phi = 2.0f * PI * Xi.x;
+    float cosTheta = sqrt((1.0f - Xi.y) / (1.0f + (a * a - 1.0f) * Xi.y));
+    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
+    float3 H;
+    H.x = cos(phi) * sinTheta;
+    H.y = sin(phi) * sinTheta;
+    H.z = cosTheta;
+    float3 up = abs(N.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 tangent = normalize(cross(up, N));
+    float3 bitangent = cross(N, tangent);
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+float GeometrySchlickGGX_IBL(float NdotV, float roughness) {
+    float k = (roughness * roughness) / 2.0f;
+    return NdotV / (NdotV * (1.0f - k) + k);
+}
+float GeometrySmith_IBL(float3 N, float3 V, float3 L, float roughness) {
+    float nv = max(dot(N, V), 0.0f);
+    float nl = max(dot(N, L), 0.0f);
+    return GeometrySchlickGGX_IBL(nv, roughness) * GeometrySchlickGGX_IBL(nl, roughness);
+}
+)HLSL";
+
+  static const char* kBakeCubeDecls = R"HLSL(
+TextureCube gEnvMap : register(t0);
+SamplerState gSampler : register(s0);
+)HLSL";
+
+  static const char* kBakeSky = R"HLSL(
+float4 PS(VSOut input) : SV_Target {
+    float3 dir = FaceDir(gFaceIndex, input.TexC);
+    return float4(SampleEnvironment(dir), 1.0f);
+}
+)HLSL";
+
+  static const char* kBakeIrradiance = R"HLSL(
+float4 PS(VSOut input) : SV_Target {
+    float3 N = normalize(FaceDir(gFaceIndex, input.TexC));
+    float3 up = abs(N.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 right = normalize(cross(up, N));
+    up = normalize(cross(N, right));
+    float3 irradiance = float3(0.0f, 0.0f, 0.0f);
+    float nrSamples = 0.0f;
+    const float sampleDelta = 0.025f;
+    [loop] for (float phi = 0.0f; phi < 2.0f * PI; phi += sampleDelta) {
+        [loop] for (float theta = 0.0f; theta < 0.5f * PI; theta += sampleDelta) {
+            float3 ts = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+            float3 sv = ts.x * right + ts.y * up + ts.z * N;
+            irradiance += gEnvMap.SampleLevel(gSampler, sv, 0).rgb * cos(theta) * sin(theta);
+            nrSamples += 1.0f;
+        }
+    }
+    irradiance = PI * irradiance / max(nrSamples, 1.0f);
+    return float4(irradiance, 1.0f);
+}
+)HLSL";
+
+  static const char* kBakePrefilter = R"HLSL(
+float4 PS(VSOut input) : SV_Target {
+    float3 N = normalize(FaceDir(gFaceIndex, input.TexC));
+    float3 V = N;
+    const uint SAMPLE_COUNT = 1024u;
+    float totalWeight = 0.0f;
+    float3 prefilteredColor = float3(0.0f, 0.0f, 0.0f);
+    [loop] for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
+        float2 Xi = Hammersley(i, SAMPLE_COUNT);
+        float3 H = ImportanceSampleGGX(Xi, N, gRoughness);
+        float3 L = normalize(2.0f * dot(V, H) * H - V);
+        float NdotL = max(dot(N, L), 0.0f);
+        if (NdotL > 0.0f) {
+            float3 c = min(gEnvMap.SampleLevel(gSampler, L, 0).rgb, 60.0f);
+            prefilteredColor += c * NdotL;
+            totalWeight += NdotL;
+        }
+    }
+    return float4(prefilteredColor / max(totalWeight, 1e-4f), 1.0f);
+}
+)HLSL";
+
+  static const char* kBakeBrdf = R"HLSL(
+float2 IntegrateBRDF(float NdotV, float roughness) {
+    float3 V = float3(sqrt(1.0f - NdotV * NdotV), 0.0f, NdotV);
+    float A = 0.0f;
+    float B = 0.0f;
+    float3 N = float3(0.0f, 0.0f, 1.0f);
+    const uint SAMPLE_COUNT = 1024u;
+    [loop] for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
+        float2 Xi = Hammersley(i, SAMPLE_COUNT);
+        float3 H = ImportanceSampleGGX(Xi, N, roughness);
+        float3 L = normalize(2.0f * dot(V, H) * H - V);
+        float nl = max(L.z, 0.0f);
+        float nh = max(H.z, 0.0f);
+        float vh = max(dot(V, H), 0.0f);
+        if (nl > 0.0f) {
+            float G = GeometrySmith_IBL(N, V, L, roughness);
+            float G_Vis = (G * vh) / max(nh * NdotV, 1e-6f);
+            float Fc = pow(1.0f - vh, 5.0f);
+            A += (1.0f - Fc) * G_Vis;
+            B += Fc * G_Vis;
+        }
+    }
+    return float2(A / float(SAMPLE_COUNT), B / float(SAMPLE_COUNT));
+}
+float4 PS(VSOut input) : SV_Target {
+    float2 r = IntegrateBRDF(max(input.TexC.x, 1e-3f), input.TexC.y);
+    return float4(r, 0.0f, 0.0f);
+}
+)HLSL";
+
+  const std::string skySrc = std::string(kBakeCommon) + kBakeSky;
+  const std::string irrSrc =
+      std::string(kBakeCommon) + kBakeCubeDecls + kBakeIrradiance;
+  const std::string preSrc =
+      std::string(kBakeCommon) + kBakeCubeDecls + kBakePrefilter;
+  const std::string brdfSrc = std::string(kBakeCommon) + kBakeBrdf;
+
+  auto vs = ShaderHelper::CompileSource(kBakeVS, "VS", "vs_5_0", "IblBakeVS");
+  auto skyPS = ShaderHelper::CompileSource(skySrc, "PS", "ps_5_0", "IblSkyPS");
+  auto irradiancePS =
+      ShaderHelper::CompileSource(irrSrc, "PS", "ps_5_0", "IblIrradiancePS");
+  auto prefilterPS =
+      ShaderHelper::CompileSource(preSrc, "PS", "ps_5_0", "IblPrefilterPS");
+  auto brdfPS =
+      ShaderHelper::CompileSource(brdfSrc, "PS", "ps_5_0", "IblBrdfPS");
+
+  D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
+  pso.InputLayout = {nullptr, 0};
+  pso.pRootSignature = mBakeRootSig.Get();
+  pso.VS = {reinterpret_cast<BYTE*>(vs->GetBufferPointer()),
+            vs->GetBufferSize()};
+  CD3DX12_RASTERIZER_DESC rast(D3D12_DEFAULT);
+  rast.CullMode = D3D12_CULL_MODE_NONE;
+  pso.RasterizerState = rast;
+  pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+  auto depthState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+  depthState.DepthEnable = false;
+  depthState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+  pso.DepthStencilState = depthState;
+  pso.SampleMask = UINT_MAX;
+  pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+  pso.NumRenderTargets = 1;
+  pso.DSVFormat = DXGI_FORMAT_UNKNOWN;
+  pso.SampleDesc.Count = 1;
+
+  // Sky / irradiance / prefilter render into RGBA16F cube faces.
+  pso.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  pso.PS = {reinterpret_cast<BYTE*>(skyPS->GetBufferPointer()),
+            skyPS->GetBufferSize()};
+  ThrowIfFailed(
+      mDevice->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mBakeSkyPSO)));
+  pso.PS = {reinterpret_cast<BYTE*>(irradiancePS->GetBufferPointer()),
+            irradiancePS->GetBufferSize()};
+  ThrowIfFailed(mDevice->CreateGraphicsPipelineState(
+      &pso, IID_PPV_ARGS(&mBakeIrradiancePSO)));
+  pso.PS = {reinterpret_cast<BYTE*>(prefilterPS->GetBufferPointer()),
+            prefilterPS->GetBufferSize()};
+  ThrowIfFailed(mDevice->CreateGraphicsPipelineState(
+      &pso, IID_PPV_ARGS(&mBakePrefilterPSO)));
+
+  // BRDF LUT renders into an RG16F 2D target.
+  pso.RTVFormats[0] = DXGI_FORMAT_R16G16_FLOAT;
+  pso.PS = {reinterpret_cast<BYTE*>(brdfPS->GetBufferPointer()),
+            brdfPS->GetBufferSize()};
+  ThrowIfFailed(
+      mDevice->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&mBakeBrdfPSO)));
+}
+
+void BoxApp::BakeIblMaps() {
+  BuildIblBakePipeline();
+
+  const UINT kEnvSize = 256;
+  const UINT kIrradianceSize = 32;
+  const UINT kPrefilterSize = 128;
+  const UINT kPrefilterMips = 8;
+  const UINT kBrdfSize = 256;
+
+  auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+
+  auto makeCube = [&](UINT size, UINT mips, ComPtr<ID3D12Resource>& res) {
+    auto desc =
+        CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R16G16B16A16_FLOAT, size, size,
+                                     6, static_cast<UINT16>(mips), 1, 0,
+                                     D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    ThrowIfFailed(mDevice->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&res)));
+  };
+  makeCube(kEnvSize, 1, mEnvCube);
+  makeCube(kIrradianceSize, 1, mIrradianceMap);
+  makeCube(kPrefilterSize, kPrefilterMips, mPrefilteredEnvMap);
+
+  auto brdfDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+      DXGI_FORMAT_R16G16_FLOAT, kBrdfSize, kBrdfSize, 1, 1, 1, 0,
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+  ThrowIfFailed(mDevice->CreateCommittedResource(
+      &defaultHeap, D3D12_HEAP_FLAG_NONE, &brdfDesc,
+      D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&mBrdfLut)));
+
+  // RTV 6 env + 6 irradiance + 6 * mips prefilter + 1 BRDF.
+  D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+  rtvHeapDesc.NumDescriptors = 6 + 6 + 6 * kPrefilterMips + 1;
+  rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+  rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+  ThrowIfFailed(
+      mDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mBakeRtvHeap)));
+  auto rtvBase = mBakeRtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+  auto makeFaceRtv = [&](ID3D12Resource* res, UINT face, UINT mip,
+                         INT slot) -> CD3DX12_CPU_DESCRIPTOR_HANDLE {
+    D3D12_RENDER_TARGET_VIEW_DESC rtv = {};
+    rtv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+    rtv.Texture2DArray.MipSlice = mip;
+    rtv.Texture2DArray.FirstArraySlice = face;
+    rtv.Texture2DArray.ArraySize = 1;
+    rtv.Texture2DArray.PlaneSlice = 0;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE h(rtvBase, slot, mRtvDescriptorSize);
+    mDevice->CreateRenderTargetView(res, &rtv, h);
+    return h;
+  };
+
+  const int kEnvSrvIndex = RenderingSystem::kBrdfLutSrvIndex + 1;
+  CreateCubeSRV(mEnvCube, kEnvSrvIndex);
+  CD3DX12_GPU_DESCRIPTOR_HANDLE envSrvGpu(
+      mCbvHeap->GetGPUDescriptorHandleForHeapStart(),
+      static_cast<INT>(kEnvSrvIndex), mCbvSrvDescriptorSize);
+
+  ID3D12DescriptorHeap* heaps[] = {mCbvHeap.Get()};
+  mCommandList->SetDescriptorHeaps(1, heaps);
+
+  auto barrier = [&](ID3D12Resource* r, D3D12_RESOURCE_STATES from,
+                     D3D12_RESOURCE_STATES to) {
+    auto b = CD3DX12_RESOURCE_BARRIER::Transition(r, from, to);
+    mCommandList->ResourceBarrier(1, &b);
+  };
+  auto setViewport = [&](UINT size) {
+    D3D12_VIEWPORT vp = {
+        0.0f, 0.0f, static_cast<float>(size), static_cast<float>(size),
+        0.0f, 1.0f};
+    D3D12_RECT sc = {0, 0, static_cast<LONG>(size), static_cast<LONG>(size)};
+    mCommandList->RSSetViewports(1, &vp);
+    mCommandList->RSSetScissorRects(1, &sc);
+  };
+
+  struct BakeConstants {
+    UINT face;
+    float roughness;
+    float pad0;
+    float pad1;
+  };
+
+  mCommandList->SetGraphicsRootSignature(mBakeRootSig.Get());
+  mCommandList->SetGraphicsRootDescriptorTable(1, envSrvGpu);
+  mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+  INT rtvSlot = 0;
+
+  // Sky
+  barrier(mEnvCube.Get(), D3D12_RESOURCE_STATE_COMMON,
+          D3D12_RESOURCE_STATE_RENDER_TARGET);
+  mCommandList->SetPipelineState(mBakeSkyPSO.Get());
+  setViewport(kEnvSize);
+  for (UINT face = 0; face < 6; ++face) {
+    auto h = makeFaceRtv(mEnvCube.Get(), face, 0, rtvSlot++);
+    mCommandList->OMSetRenderTargets(1, &h, FALSE, nullptr);
+    BakeConstants bc{face, 0.0f, 0.0f, 0.0f};
+    mCommandList->SetGraphicsRoot32BitConstants(0, 4, &bc, 0);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
+  }
+  barrier(mEnvCube.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+  // Irradiance
+  barrier(mIrradianceMap.Get(), D3D12_RESOURCE_STATE_COMMON,
+          D3D12_RESOURCE_STATE_RENDER_TARGET);
+  mCommandList->SetPipelineState(mBakeIrradiancePSO.Get());
+  setViewport(kIrradianceSize);
+  for (UINT face = 0; face < 6; ++face) {
+    auto h = makeFaceRtv(mIrradianceMap.Get(), face, 0, rtvSlot++);
+    mCommandList->OMSetRenderTargets(1, &h, FALSE, nullptr);
+    BakeConstants bc{face, 0.0f, 0.0f, 0.0f};
+    mCommandList->SetGraphicsRoot32BitConstants(0, 4, &bc, 0);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
+  }
+  barrier(mIrradianceMap.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+  // Prefiltr
+  barrier(mPrefilteredEnvMap.Get(), D3D12_RESOURCE_STATE_COMMON,
+          D3D12_RESOURCE_STATE_RENDER_TARGET);
+  mCommandList->SetPipelineState(mBakePrefilterPSO.Get());
+  for (UINT mip = 0; mip < kPrefilterMips; ++mip) {
+    UINT mipSize = kPrefilterSize >> mip;
+    if (mipSize < 1) mipSize = 1;
+    float roughness =
+        (kPrefilterMips > 1)
+            ? static_cast<float>(mip) / static_cast<float>(kPrefilterMips - 1)
+            : 0.0f;
+    setViewport(mipSize);
+    for (UINT face = 0; face < 6; ++face) {
+      auto h = makeFaceRtv(mPrefilteredEnvMap.Get(), face, mip, rtvSlot++);
+      mCommandList->OMSetRenderTargets(1, &h, FALSE, nullptr);
+      BakeConstants bc{face, roughness, 0.0f, 0.0f};
+      mCommandList->SetGraphicsRoot32BitConstants(0, 4, &bc, 0);
+      mCommandList->DrawInstanced(3, 1, 0, 0);
+    }
+  }
+  barrier(mPrefilteredEnvMap.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+  // LUT
+  barrier(mBrdfLut.Get(), D3D12_RESOURCE_STATE_COMMON,
+          D3D12_RESOURCE_STATE_RENDER_TARGET);
+  mCommandList->SetPipelineState(mBakeBrdfPSO.Get());
+  setViewport(kBrdfSize);
+  {
+    D3D12_RENDER_TARGET_VIEW_DESC rtv = {};
+    rtv.Format = DXGI_FORMAT_R16G16_FLOAT;
+    rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE h(rtvBase, rtvSlot++, mRtvDescriptorSize);
+    mDevice->CreateRenderTargetView(mBrdfLut.Get(), &rtv, h);
+    mCommandList->OMSetRenderTargets(1, &h, FALSE, nullptr);
+    BakeConstants bc{0, 0.0f, 0.0f, 0.0f};
+    mCommandList->SetGraphicsRoot32BitConstants(0, 4, &bc, 0);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
+  }
+  barrier(mBrdfLut.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+  // Final SRVs
   CreateCubeSRV(mIrradianceMap, RenderingSystem::kIrradianceSrvIndex);
-
-  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
-      mDevice.Get(), mCommandList.Get(), (dir + L"prefiltered.dds").c_str(),
-      mPrefilteredEnvMap, mPrefilteredEnvUpload));
   CreateCubeSRV(mPrefilteredEnvMap, RenderingSystem::kPrefilteredEnvSrvIndex);
-
-  ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(
-      mDevice.Get(), mCommandList.Get(), (dir + L"brdf_lut.dds").c_str(),
-      mBrdfLut, mBrdfLutUpload));
   CreateSRV(mBrdfLut, RenderingSystem::kBrdfLutSrvIndex);
 
-  const UINT prefilteredMips = mPrefilteredEnvMap->GetDesc().MipLevels;
-  mComposeConstants.IblParams = DirectX::SimpleMath::Vector4(
-      static_cast<float>(prefilteredMips > 0 ? prefilteredMips - 1 : 7),
-      0.2f,   // IBL intensity //было 1.0
-      1.0f,   // enable IBL
-      1.0f);  // ambient occlusion
-  OutputDebugStringA("IBL maps loaded.\n");
+  mComposeConstants.IblParams =
+      DirectX::SimpleMath::Vector4(static_cast<float>(kPrefilterMips - 1),
+                                   1.0f,   // IBL intensity
+                                   1.0f,   // enable IBL
+                                   1.0f);  // ambient occlusion
+  OutputDebugStringA("IBL maps baked on GPU.\n");
 }
 
 void BoxApp::CreateSamplerHeap() {
@@ -1224,7 +1629,7 @@ void BoxApp::CreateSamplerHeap() {
                                         D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
   mDevice->CreateSampler(&shadowSampler, offset);
 
-  // s2: trilinear, clamped используется для IBL cubemaps и BRDF LUT.
+  // s2: trilinear, clamped - used for IBL cubemaps and the BRDF LUT.
   D3D12_SAMPLER_DESC iblSampler = samplerDesc;
   iblSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
   iblSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -1666,7 +2071,7 @@ void BoxApp::Update(const GameTimer& gt) {
       DirectX::SimpleMath::Vector4(80.0f, 220.0f, 600.0f, 0.0f);
 
   mComposeConstants.PostProcessParams =
-      DirectX::SimpleMath::Vector4(0.7f, 2.2f, 1.0f, 1.0f);  //.x был 1.0
+      DirectX::SimpleMath::Vector4(1.0f, 2.2f, 1.0f, 1.0f);
 
   mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
@@ -1721,8 +2126,7 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.Lights[directionalLightIndex].DirectionAndType =
       DirectX::SimpleMath::Vector4(lightDir.x, lightDir.y, lightDir.z, 1.0f);
   mComposeConstants.Lights[directionalLightIndex].ColorAndIntensity =
-      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f,
-                                   2.5f);  // поменял интенсити, раньше было 1.6
+      DirectX::SimpleMath::Vector4(1.0f, 0.95f, 0.82f, 1.6f);
 
   // Spot #1: спот щеленый
   mComposeConstants.Lights[firstSpotLightIndex].PositionWorldAndRange =

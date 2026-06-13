@@ -96,10 +96,9 @@ float CalcShadowFactor(float3 worldPos, float3 normalW, float3 lightDirW, float 
 }
 
 
-// Cook-Torrance PBR
-
+// Cook-Torrance
 float DistributionGGX(float3 N, float3 H, float roughness) {
-    float a = roughness * roughness;       // Disney reparam: alpha = roughness^2
+    float a = roughness * roughness;
     float a2 = a * a;
     float NdotH = max(dot(N, H), 0.0f);
     float NdotH2 = NdotH * NdotH;
@@ -112,7 +111,7 @@ float GeometrySchlickGGX(float NdotV, float k) {
     return NdotV / (NdotV * (1.0f - k) + k);
 }
 
-// k is supplied by the caller: direct light -> (r+1)^2/8, IBL -> r^2/2.
+
 float GeometrySmith(float3 N, float3 V, float3 L, float k) {
     float NdotV = max(dot(N, V), 0.0f);
     float NdotL = max(dot(N, L), 0.0f);
@@ -128,7 +127,7 @@ float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     return F0 + (r - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
 }
 
-// Direct radiance contribution of a single analytic light.
+
 float3 EvaluateLightPBR(GpuLight light, float3 N, float3 V, float3 worldPos,
                         float3 albedo, float metallic, float roughness,
                         float3 F0, float shadowFactor) {
@@ -265,10 +264,39 @@ float4 PS(PS_INPUT input) : SV_Target {
     float4 normalSample = gNormal.Sample(gSampler, sampleUv);
     float depth = gDepth.Sample(gSampler, sampleUv).r;
     if (depth >= 1.0f) {
-        return float4(0.0f, 0.0f, 0.0f, 1.0f);
+        float linearDepth;
+        // Восстанавливаем позицию виртуальной точки на дальней плоскости (depth = 1.0)
+        float3 worldPos = ReconstructWorldPos(sampleUv, 1.0f, linearDepth);
+        
+        // Вычисляем направление луча из камеры к этой точке
+        float3 viewDir = normalize(worldPos - gCameraPosition.xyz);
+        
+        // Сэмплируем предфильтрованную карту на мипе 0 (самое четкое изображение неба)
+        float3 skyColor = gPrefilteredEnvMap.SampleLevel(gSamplerLinearClamp, viewDir, 0.0f).rgb;
+        
+        float exposure = max(gPostProcessParams.x, 0.0001f);
+        float gamma = max(gPostProcessParams.y, 0.0001f);
+        bool enableHdr = (gPostProcessParams.z > 0.5f);
+        bool enableGammaCorrection = (gPostProcessParams.w > 0.5f);
+
+        if (enableHdr) {
+            skyColor = 1.0f - exp(-skyColor * exposure);
+        }
+        if (enableGammaCorrection) {
+            skyColor = pow(saturate(skyColor), 1.0f / gamma);
+        }
+        
+        if (gMonitorEffectParams.x > 0.5f) {
+            skyColor = ApplyMonitorEffect(input.TexC, skyColor);
+        }
+        if (gMonitorEffectParams.w > 0.5f) {
+            skyColor = ApplyDithering(skyColor, input.TexC);
+        }
+
+        return float4(skyColor, 1.0f);
     }
 
-    float3 albedo = albedoSample.rgb;            // already linear from the G-buffer
+    float3 albedo = albedoSample.rgb;
     float metallic = saturate(albedoSample.a);
     float roughness = saturate(normalSample.a);
     float3 N = normalize(normalSample.xyz * 2.0f - 1.0f);
@@ -278,13 +306,13 @@ float4 PS(PS_INPUT input) : SV_Target {
     float3 V = normalize(gCameraPosition.xyz - worldPos);
     float NdotV = max(dot(N, V), 0.0f);
 
-    // reflectivity 0.4
+    // Base reflectivity: 0.04 for dielectrics, tinted by albedo for metals.
     float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
 
     float3 dirLightDir = normalize(-gLights[0].DirectionAndType.xyz);
     float shadowFactor = CalcShadowFactor(worldPos, N, dirLightDir, pixelDepth);
 
-    //Direct lighting
+    // Direct lighting (analytic lights)
     float3 Lo = 0.0f;
     uint lightCount = min((uint)gLightCount.x, MAX_LIGHTS);
     [loop]
@@ -293,7 +321,7 @@ float4 PS(PS_INPUT input) : SV_Target {
                                roughness, F0, shadowFactor);
     }
 
-    // Indirect lighting (IBL ambient + reflections)
+    // Indirect lighting (IBL ambient + reflections) чисто взял из лекции :)
     float ao = gIblParams.w > 0.0f ? gIblParams.w : 1.0f;
     float3 ambient;
     if (gIblParams.z > 0.5f) {
@@ -313,7 +341,7 @@ float4 PS(PS_INPUT input) : SV_Target {
 
         ambient = (kD * diffuseIBL + specularIBL) * ao * gIblParams.y;
     } else {
-        ambient = albedo * 0.03f * ao; // fallback constant ambient if IBL is off
+        ambient = albedo * 0.03f * ao; // fallback константа
     }
 
     float3 color = ambient + Lo;

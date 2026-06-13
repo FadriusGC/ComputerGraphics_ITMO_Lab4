@@ -78,11 +78,10 @@ class BoxApp {
   // индексу
   void CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex);
 
-  // Creates a TextureCube SRV (for IBL irradiance / prefiltered maps).
+  // Генерация IBL и irradiance карт, а также SRV для них
   void CreateCubeSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex);
-
-  // Loads the three precomputed IBL maps and creates their SRVs.
-  void LoadIblMaps();
+  void BakeIblMaps();
+  void BuildIblBakePipeline();
 
   void CreateSamplerHeap();
 
@@ -139,14 +138,19 @@ class BoxApp {
   // Вектор всех загруженных текстур
   std::vector<std::unique_ptr<Texture>> mTextures;
 
-  // IBL maps (precomputed): diffuse irradiance + specular prefilter cubes
-  // and the split-sum BRDF integration LUT.
+  // IBL maps baked on the GPU at startup (irradiance + prefilter cubes,
+  // split-sum BRDF LUT) plus the intermediate source environment cube.
+  ComPtr<ID3D12Resource> mEnvCube;
   ComPtr<ID3D12Resource> mIrradianceMap;
-  ComPtr<ID3D12Resource> mIrradianceUpload;
   ComPtr<ID3D12Resource> mPrefilteredEnvMap;
-  ComPtr<ID3D12Resource> mPrefilteredEnvUpload;
   ComPtr<ID3D12Resource> mBrdfLut;
-  ComPtr<ID3D12Resource> mBrdfLutUpload;
+  // IBL bake pipeline (render-to-cubemap passes).
+  ComPtr<ID3D12DescriptorHeap> mBakeRtvHeap;
+  ComPtr<ID3D12RootSignature> mBakeRootSig;
+  ComPtr<ID3D12PipelineState> mBakeSkyPSO;
+  ComPtr<ID3D12PipelineState> mBakeIrradiancePSO;
+  ComPtr<ID3D12PipelineState> mBakePrefilterPSO;
+  ComPtr<ID3D12PipelineState> mBakeBrdfPSO;
   static constexpr int kTextureSrvHeapStart = RenderingSystem::kTextureSrvStart;
   // Входной лейаут
   std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
