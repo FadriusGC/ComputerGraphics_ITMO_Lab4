@@ -700,7 +700,7 @@ void BoxApp::BuildBoxGeometry() {
     if (cupLoaded) {
       // Coffee cup placed at the centre of the large sponza, scaled up.
       const float kCupScale = 40.0f;
-      const DirectX::SimpleMath::Vector3 kCupPosition(-120.0f, 0.0f, 0.0f);
+      const DirectX::SimpleMath::Vector3 kCupPosition(-120.0f, 100.0f, 0.0f);
       appendGeometry(
           cupGeometry,
           DirectX::SimpleMath::Matrix::CreateScale(kCupScale) *
@@ -1985,6 +1985,12 @@ void BoxApp::Update(const GameTimer& gt) {
   }
 
   mDitheringToggleKeyWasDown = ditheringKeyDown;
+
+  const bool beckmannKeyDown = (GetAsyncKeyState('B') & 0x8000) != 0;
+  if (beckmannKeyDown && !mBeckmannToggleKeyWasDown) {
+    mUseBeckmann = !mUseBeckmann;
+  }
+  mBeckmannToggleKeyWasDown = beckmannKeyDown;
   // фрикам
   if (GetActiveWindow() == m_window.GetHWND()) {
     DirectX::SimpleMath::Vector3 lookDir(cosf(mCamPitch) * sinf(mCamYaw),
@@ -2076,6 +2082,9 @@ void BoxApp::Update(const GameTimer& gt) {
   mComposeConstants.MonitorEffectParams = DirectX::SimpleMath::Vector4(
       mMonitorEffectEnabled ? 1.0f : 0.0f, totalTime,
       mFishEyeEnabled ? 1.0f : 0.0f, mDitheringEnabled ? 1.0f : 0.0f);
+
+  mComposeConstants.NdfParams = DirectX::SimpleMath::Vector4(
+      mUseBeckmann ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
   DirectX::SimpleMath::Vector3 lightDir(-0.55f, -1.0f, -0.35f);
   lightDir.Normalize();

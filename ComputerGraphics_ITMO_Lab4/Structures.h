@@ -101,6 +101,9 @@ struct ComposeConstants {
   // y: IBL intensity, z: enable IBL (1/0), w: ambient occlusion factor.
   DirectX::SimpleMath::Vector4 IblParams =
       DirectX::SimpleMath::Vector4(7.0f, 1.0f, 1.0f, 1.0f);
+  // NDF (specular distribution) selector. x: 0 = GGX (default), 1 = Beckmann.
+  DirectX::SimpleMath::Vector4 NdfParams =
+      DirectX::SimpleMath::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
   DirectX::SimpleMath::Matrix ShadowTransforms[kCascadeCount];
   DirectX::SimpleMath::Matrix LightViewProj[kCascadeCount];
   GpuLight Lights[kMaxLights];

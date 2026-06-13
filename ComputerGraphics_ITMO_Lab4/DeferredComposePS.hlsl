@@ -37,6 +37,7 @@ cbuffer cbCompose : register(b0) {
     float4 gPostProcessParams; // x: exposure, y: gamma, z: enableHdr, w: enableGammaCorrection
     float4 gMonitorEffectParams; // x: enableMonitorEffect, y: totalTime
     float4 gIblParams; // x: prefiltered max mip, y: IBL intensity, z: enable IBL, w: ao
+    float4 gNdfParams;  // x: NDF type (0 = GGX, 1 = Beckmann)
     float4x4 gShadowTransforms[CASCADE_COUNT];
     float4x4 gLightViewProj[CASCADE_COUNT];
     GpuLight gLights[MAX_LIGHTS];
@@ -107,6 +108,19 @@ float DistributionGGX(float3 N, float3 H, float roughness) {
     return a2 / max(denom, 1e-7f);
 }
 
+// доп с Бекманном
+float DistributionBeckmann(float3 N, float3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0f);
+    float NdotH2 = NdotH * NdotH;
+    if (NdotH2 <= 1e-7f) return 0.0f;
+    float NdotH4 = NdotH2 * NdotH2;
+    float tan2 = (1.0f - NdotH2) / NdotH2;       // tan^2(theta_h)
+    float denom = PI * a2 * NdotH4;
+    return exp(-tan2 / a2) / max(denom, 1e-7f);
+}
+
 float GeometrySchlickGGX(float NdotV, float k) {
     return NdotV / (NdotV * (1.0f - k) + k);
 }
@@ -162,7 +176,9 @@ float3 EvaluateLightPBR(GpuLight light, float3 N, float3 V, float3 worldPos,
     float3 H = normalize(V + L);
     float k = roughness + 1.0f;
     k = (k * k) / 8.0f;                       // direct-light geometry term
-    float D = DistributionGGX(N, H, roughness);
+    float D = (gNdfParams.x > 0.5f)
+                  ? DistributionBeckmann(N, H, roughness)
+                  : DistributionGGX(N, H, roughness);
     float G = GeometrySmith(N, V, L, k);
     float3 F = FresnelSchlick(max(dot(H, V), 0.0f), F0);
 

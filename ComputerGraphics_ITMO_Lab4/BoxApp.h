@@ -78,8 +78,12 @@ class BoxApp {
   // индексу
   void CreateSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex);
 
-  // Генерация IBL и irradiance карт, а также SRV для них
+  // Creates a TextureCube SRV (for IBL irradiance / prefiltered maps).
   void CreateCubeSRV(ComPtr<ID3D12Resource> textureResource, int heapIndex);
+
+  // Bakes the IBL maps on the GPU at startup (sky -> irradiance /
+  // prefilter / BRDF LUT) and creates their SRVs. Replaces the old
+  // offline DDS-loading path.
   void BakeIblMaps();
   void BuildIblBakePipeline();
 
@@ -215,6 +219,8 @@ class BoxApp {
   bool mFishEyeToggleKeyWasDown = false;
   bool mDitheringEnabled = false;
   bool mDitheringToggleKeyWasDown = false;
+  bool mUseBeckmann = false;  // false = GGX, true = Beckmann
+  bool mBeckmannToggleKeyWasDown = false;
 
   static constexpr size_t kFallingLightCount = 58;
   std::array<FallingPointLight, kFallingLightCount> mFallingLights;
